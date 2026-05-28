@@ -1,5 +1,7 @@
-// All-to-All RDMA Benchmark with Random Dispatch
-// Each GPU sends 128 x 7KB messages randomly to other GPUs across nodes
+// All-to-All RDMA Benchmark with cross-node dispatch.
+// Each GPU sends NUM_MSGS * TOPK messages. Message size and traffic pattern
+// are runtime arguments so the same binary can sweep cross-rail and
+// rail-aligned cases.
 
 #include <arpa/inet.h>
 #ifndef USE_LIBFABRIC_CXI
@@ -35,7 +37,7 @@
 constexpr int NUM_GPUS_PER_NODE = 8;
 #endif
 constexpr int NUM_NICS_PER_GPU = 1;  // 1 for p6, 2 for p5en
-constexpr size_t MSG_SIZE = 7168;    // 7KB
+constexpr size_t DEFAULT_MSG_SIZE = 7168;  // 7KB
 constexpr int NUM_MSGS = 128;
 constexpr int TOPK = 8;
 constexpr int WINDOW_SIZE = 2048;
@@ -46,6 +48,8 @@ std::mutex barrier_mutex;
 std::condition_variable barrier_cv;
 std::atomic<int> barrier_count{0};
 int barrier_target = 0;
+size_t g_msg_size = DEFAULT_MSG_SIZE;
+bool g_rail_aligned = false;
 
 // Global TCP socket state for control plane (exchange + barriers)
 int control_listenfd = -1;
@@ -159,7 +163,7 @@ void cxi_init(CxiContext& cxi, int local_rank) {
   check_fi(fi_enable(cxi.ep), "fi_enable");
   fi_freeinfo(info);
 
-  cxi.buf_size = NUM_MSGS * MSG_SIZE;
+  cxi.buf_size = NUM_MSGS * g_msg_size;
   CUDA_CHECK(cudaMalloc(&cxi.gpu_buf, cxi.buf_size));
   CUDA_CHECK(cudaMemset(cxi.gpu_buf, local_rank, cxi.buf_size));
   cxi.mr = register_cuda_mr(cxi.domain, cxi.ep, cxi.gpu_buf, cxi.buf_size,
@@ -206,12 +210,27 @@ struct PeerEndpoint {
 #endif
 
 // Prepopulated random dispatch table
-std::vector<int> generate_dispatch_table(int rank, int world_size) {
+std::vector<int> generate_dispatch_table(int rank, int world_size,
+                                         int local_world_size,
+                                         bool rail_aligned) {
   std::vector<int> table(NUM_MSGS * TOPK);
   unsigned int seed = rank * 12345;
+  int const node_rank = rank / local_world_size;
+  int const num_nodes = std::max(1, world_size / local_world_size);
+  int const local_rank = rank % local_world_size;
 
   for (int i = 0; i < NUM_MSGS * TOPK; i++) {
-    table[i] = rand_r(&seed) % world_size;
+    if (rail_aligned) {
+      int remote_node = (node_rank + 1 + (i % std::max(1, num_nodes - 1))) %
+                        num_nodes;
+      table[i] = remote_node * local_world_size + local_rank;
+    } else {
+      int dst = rand_r(&seed) % world_size;
+      while (dst / local_world_size == node_rank && num_nodes > 1) {
+        dst = rand_r(&seed) % world_size;
+      }
+      table[i] = dst;
+    }
   }
   return table;
 }
@@ -573,7 +592,9 @@ void run_cxi_benchmark(int rank, int local_rank, int world_size,
     cxi.peer_addrs[r] = addr;
   }
 
-  auto dispatch_table = generate_dispatch_table(rank, world_size);
+  auto dispatch_table =
+      generate_dispatch_table(rank, world_size, local_world_size,
+                              g_rail_aligned);
   int node_rank = rank / local_world_size;
   CUDA_CHECK(cudaDeviceSynchronize());
   tcp_barrier(rank, world_size);
@@ -625,9 +646,9 @@ void run_cxi_benchmark(int rank, int local_rank, int world_size,
 
       int msg_id = op_idx / TOPK;
       auto& ctx = contexts[next_ctx++ % contexts.size()];
-      char* local = static_cast<char*>(cxi.gpu_buf) + msg_id * MSG_SIZE;
-      ssize_t rc = fi_write(cxi.ep, local, MSG_SIZE, fi_mr_desc(cxi.mr),
-                            cxi.peer_addrs[dst_rank], msg_id * MSG_SIZE,
+      char* local = static_cast<char*>(cxi.gpu_buf) + msg_id * g_msg_size;
+      ssize_t rc = fi_write(cxi.ep, local, g_msg_size, fi_mr_desc(cxi.mr),
+                            cxi.peer_addrs[dst_rank], msg_id * g_msg_size,
                             remote_info[dst_rank].mr_key, &ctx.context);
       check_fi(static_cast<int>(rc), "fi_write(cxi alltoall)");
       send_inflight++;
@@ -661,7 +682,7 @@ void run_cxi_benchmark(int rank, int local_rank, int world_size,
   printf("Rank %d: average of last %d rounds: %.2f us\n", rank,
          NUM_ROUNDS - WARMUP_ROUNDS, avg_us);
   if (rank == 0) {
-    double total_data_gb = (NUM_MSGS * TOPK * MSG_SIZE) / 1e9;
+    double total_data_gb = (NUM_MSGS * TOPK * g_msg_size) / 1e9;
     double elapsed_s = avg_us / 1e6;
     printf("Average time: %.2f us\n", avg_us);
     printf("Throughput: %.2f GB/s\n", total_data_gb / elapsed_s);
@@ -715,7 +736,7 @@ void run_benchmark(int rank, int local_rank, int world_size,
     nic.pd = ibv_alloc_pd(nic.ctx);
     nic.cq = ibv_create_cq(nic.ctx, 4096, nullptr, nullptr, 0);
 
-    nic.buf_size = NUM_MSGS * MSG_SIZE;
+    nic.buf_size = NUM_MSGS * g_msg_size;
     CUDA_CHECK(cudaMalloc(&nic.gpu_buf, nic.buf_size));
     CUDA_CHECK(cudaMemset(nic.gpu_buf, rank, nic.buf_size));
 
@@ -777,7 +798,7 @@ void run_benchmark(int rank, int local_rank, int world_size,
 
     for (int slot = 0; slot < 2048; slot++) {
       int msg_id = slot % NUM_MSGS;
-      ibv_sge sge = {(uint64_t)nic.gpu_buf + msg_id * MSG_SIZE, MSG_SIZE,
+      ibv_sge sge = {(uint64_t)nic.gpu_buf + msg_id * g_msg_size, g_msg_size,
                      nic.mr->lkey};
       ibv_recv_wr wr = {}, *bad_wr;
       wr.wr_id = slot;
@@ -791,8 +812,14 @@ void run_benchmark(int rank, int local_rank, int world_size,
     }
   }
 
-  auto dispatch_table = generate_dispatch_table(rank, world_size);
-  int node_rank = rank / NUM_GPUS_PER_NODE;
+  int local_world_size = NUM_GPUS_PER_NODE;
+  if (char const* env = std::getenv("LOCAL_WORLD_SIZE")) {
+    local_world_size = std::max(1, std::atoi(env));
+  }
+  auto dispatch_table =
+      generate_dispatch_table(rank, world_size, local_world_size,
+                              g_rail_aligned);
+  int node_rank = rank / local_world_size;
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // Barrier to ensure all ranks have posted their receive buffers
@@ -836,9 +863,9 @@ void run_benchmark(int rank, int local_rank, int world_size,
       qpx->wr_flags = IBV_SEND_SIGNALED;
 
       ibv_wr_rdma_write_imm(qpx, peer.remote_rkey,
-                            peer.remote_addr + msg_id * MSG_SIZE, op_idx);
+                            peer.remote_addr + msg_id * g_msg_size, op_idx);
 
-      ibv_sge sge = {(uint64_t)nic.gpu_buf + msg_id * MSG_SIZE, MSG_SIZE,
+      ibv_sge sge = {(uint64_t)nic.gpu_buf + msg_id * g_msg_size, g_msg_size,
                      nic.mr->lkey};
       ibv_wr_set_sge_list(qpx, 1, &sge);
       ibv_wr_set_ud_addr(qpx, peer.ah, peer.remote_qpn, QKEY);
@@ -862,7 +889,7 @@ void run_benchmark(int rank, int local_rank, int world_size,
           auto& recv_qp = peers[i][rank].qp;
           while (recv_completed[i] > 0) {
             int msg_id = recv_slot[i] % NUM_MSGS;
-            ibv_sge sge = {(uint64_t)nic.gpu_buf + msg_id * MSG_SIZE, MSG_SIZE,
+            ibv_sge sge = {(uint64_t)nic.gpu_buf + msg_id * g_msg_size, g_msg_size,
                            nic.mr->lkey};
             ibv_recv_wr wr = {}, *bad_wr;
             wr.wr_id = recv_slot[i];
@@ -892,7 +919,7 @@ void run_benchmark(int rank, int local_rank, int world_size,
         auto& recv_qp = peers[i][rank].qp;
         while (recv_completed[i] > 0) {
           int msg_id = recv_slot[i] % NUM_MSGS;
-          ibv_sge sge = {(uint64_t)nic.gpu_buf + msg_id * MSG_SIZE, MSG_SIZE,
+          ibv_sge sge = {(uint64_t)nic.gpu_buf + msg_id * g_msg_size, g_msg_size,
                          nic.mr->lkey};
           ibv_recv_wr wr = {}, *bad_wr;
           wr.wr_id = recv_slot[i];
@@ -936,7 +963,7 @@ void run_benchmark(int rank, int local_rank, int world_size,
          NUM_ROUNDS - WARMUP_ROUNDS, avg_us);
 
   if (rank == 0) {
-    double total_data_gb = (NUM_MSGS * TOPK * MSG_SIZE) / 1e9;
+    double total_data_gb = (NUM_MSGS * TOPK * g_msg_size) / 1e9;
     double elapsed_s = avg_us / 1e6;
     printf("Average time: %.2f us\n", avg_us);
     printf("Throughput: %.2f GB/s\n", total_data_gb / elapsed_s);
@@ -967,7 +994,7 @@ int main(int argc, char** argv) {
   if (argc < 4) {
     fprintf(stderr,
             "Usage: %s <rank> <world_size> <master_ip> [local_rank] "
-            "[verbs|cxi]\n",
+            "[verbs|cxi] [msg_size_bytes] [cross|rail]\n",
             argv[0]);
     return 1;
   }
@@ -978,6 +1005,16 @@ int main(int argc, char** argv) {
 
   int local_rank = (argc >= 5) ? atoi(argv[4]) : rank % NUM_GPUS_PER_NODE;
   char const* transport = (argc >= 6) ? argv[5] : "verbs";
+  if (argc >= 7) {
+    g_msg_size = std::max<size_t>(1, static_cast<size_t>(atoll(argv[6])));
+  }
+  char const* pattern = (argc >= 8) ? argv[7] : "cross";
+  g_rail_aligned = strcmp(pattern, "rail") == 0;
+  if (strcmp(pattern, "cross") != 0 && strcmp(pattern, "rail") != 0) {
+    fprintf(stderr, "Unknown traffic pattern '%s'; expected cross or rail\n",
+            pattern);
+    return 1;
+  }
 
 #ifdef USE_LIBFABRIC_CXI
   if (strcmp(transport, "cxi") != 0) {
