@@ -10,11 +10,21 @@ Eg:
 import os
 import subprocess
 import sys
+import argparse
+import socket
 import torch
 import torch.distributed as dist
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--transport",
+        choices=["verbs", "cxi"],
+        default=os.environ.get("ALLTOALL_TRANSPORT", "verbs"),
+    )
+    args = parser.parse_args()
+
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         print("Error: Must run with torchrun")
         sys.exit(1)
@@ -23,9 +33,11 @@ def main():
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    local_rank = int(os.environ.get("LOCAL_RANK", rank % 8))
+    local_rank = int(
+        os.environ.get("LOCAL_RANK", rank % int(os.environ.get("LOCAL_WORLD_SIZE", "8")))
+    )
 
-    master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
+    master_addr = socket.gethostbyname(os.environ.get("MASTER_ADDR", "127.0.0.1"))
 
     print(f"Rank {rank}/{world_size} on GPU {local_rank}, master: {master_addr}")
 
@@ -38,7 +50,14 @@ def main():
             print("Please run 'make' first")
         sys.exit(1)
 
-    cmd = [benchmark_path, str(rank), str(world_size), master_addr]
+    cmd = [
+        benchmark_path,
+        str(rank),
+        str(world_size),
+        master_addr,
+        str(local_rank),
+        args.transport,
+    ]
 
     try:
         result = subprocess.run(cmd, check=True, capture_output=False)
