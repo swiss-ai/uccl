@@ -331,48 +331,38 @@ ibv_ah* create_ah(ibv_pd* pd, uint8_t* remote_gid) {
 #endif
 
 void pin_to_numa(int local_rank) {
-  // For p5.48xlarge: 8 GPUs, 2 NUMA nodes
-  // GPUs 0-3 -> NUMA 0, GPUs 4-7 -> NUMA 1
-  int numa_node = local_rank / 4;
-
-  if (numa_available() < 0) {
-    fprintf(stderr, "NUMA not available\n");
-    return;
+  int local_world_size = NUM_GPUS_PER_NODE;
+  if (char const* env = std::getenv("LOCAL_WORLD_SIZE")) {
+    local_world_size = std::max(1, std::atoi(env));
   }
+  unsigned int max_cpus = std::max(1, numa_num_configured_cpus());
+  unsigned int cpus_per_rank =
+      std::max(1u, max_cpus / static_cast<unsigned int>(local_world_size));
+  if (char const* env = std::getenv("UCCL_ALLTOALL_CPUS_PER_NUMA")) {
+    cpus_per_rank = std::max(1, std::atoi(env));
+  }
+  unsigned int cpu_start = static_cast<unsigned int>(local_rank) * cpus_per_rank;
+  unsigned int cpu_end = std::min(max_cpus, cpu_start + cpus_per_rank);
 
-  // Set memory policy to bind to specific NUMA node
-  struct bitmask* numa_mask = numa_allocate_nodemask();
-  numa_bitmask_clearall(numa_mask);
-  numa_bitmask_setbit(numa_mask, numa_node);
-  numa_bind(numa_mask);  // void return, no error checking
-  numa_free_nodemask(numa_mask);
-
-  // Set CPU affinity to CPUs on the same NUMA node
   cpu_set_t cpu_mask;
   CPU_ZERO(&cpu_mask);
-
-  // Get CPUs for this NUMA node
-  struct bitmask* cpu_bitmask = numa_allocate_cpumask();
-  numa_node_to_cpus(numa_node, cpu_bitmask);
-
-  // Iterate through all possible CPUs and check if they're in the bitmask
-  unsigned int max_cpus = numa_num_configured_cpus();
-  for (unsigned int i = 0; i < max_cpus; i++) {
-    if (numa_bitmask_isbitset(cpu_bitmask, i)) {
-      CPU_SET(i, &cpu_mask);
-    }
+  for (unsigned int i = cpu_start; i < cpu_end && i < CPU_SETSIZE; i++) {
+    CPU_SET(i, &cpu_mask);
   }
 
   if (sched_setaffinity(0, sizeof(cpu_mask), &cpu_mask) < 0) {
-    fprintf(stderr, "Warning: Failed to set CPU affinity for NUMA node %d\n",
-            numa_node);
+    fprintf(stderr,
+            "Warning: Failed to set CPU affinity for local_rank %d CPUs "
+            "%u-%u\n",
+            local_rank, cpu_start, cpu_end == 0 ? 0 : cpu_end - 1);
   }
 
   cpu_set_t actual_cpu_mask;
   CPU_ZERO(&actual_cpu_mask);
   if (sched_getaffinity(0, sizeof(actual_cpu_mask), &actual_cpu_mask) == 0) {
-    printf("Rank local_rank %d NUMA node %d CPU affinity:", local_rank,
-           numa_node);
+    printf("Rank local_rank %d logical NUMA %d requested CPUs %u-%u actual "
+           "CPU affinity:",
+           local_rank, local_rank, cpu_start, cpu_end == 0 ? 0 : cpu_end - 1);
     for (unsigned int i = 0; i < max_cpus; i++) {
       if (CPU_ISSET(i, &actual_cpu_mask)) {
         printf(" %u", i);
@@ -384,9 +374,7 @@ void pin_to_numa(int local_rank) {
             local_rank);
   }
 
-  numa_free_cpumask(cpu_bitmask);
-
-  printf("Rank pinned to NUMA node %d (local_rank %d)\n", numa_node,
+  printf("Rank pinned to logical NUMA %d (local_rank %d)\n", local_rank,
          local_rank);
 }
 
