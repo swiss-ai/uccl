@@ -194,6 +194,35 @@ We test normal kernels on **8x B200 + 8x 400Gb/s EFA** with each GPU connected t
 | Internode |      32      |    49 GB/s (RDMA)    |     32      |    55 GB/s (RDMA)    |  32      |    50 GB/s (RDMA)    |
 
 
+#### On CSCS Apertus GH200 with Slingshot/CXI
+
+We validated the normal kernels on **4x GH200 per node + Slingshot/CXI** through the libfabric CXI backend (`USE_LIBFABRIC_CXI=1`, `UCCL_EP_TRANSPORT=cxi`, `FI_PROVIDER=cxi`, `NUM_MAX_NVL_PEERS=4`). The benchmark shape follows the DeepSeek-V3 pretraining-style configuration where possible.
+
+Benchmark configuration:
+
+- Tokens per batch: 4096.
+- Hidden size: 7168.
+- Top-k experts per token: 8.
+- Total experts: 288.
+- Local ranks / GPUs per node: 4.
+- NIC topology: 1 Slingshot/CXI NIC per GPU/rank, with 25 GB/s per NIC
+  (200 Gb/s).
+- Dispatch dtypes: FP8 dispatch and BF16 dispatch were benchmarked separately.
+- Combine dtype: BF16.
+- Top-k groups: 4 for the 4-node and 8-node runs; 2 for the 2-node run because only two nodes participate.
+
+The table reports the bottleneck bandwidth and transmit latency across node-local benchmark summaries. Internode rows report RDMA bandwidth; the intranode row reports NVL bandwidth. These are fresh validation runs with proxy command tracing disabled (`UCCL_PROXY_TRACE=0`), not reused allocation data.
+
+|   Type    | FP8 Dispatch #EP | Bottleneck bandwidth & latency | BF16 Dispatch #EP | Bottleneck bandwidth & latency | Combine #EP | Bottleneck bandwidth & latency |
+|:---------:|:----------------:|:------------------------------:|:-----------------:|:------------------------------:|:-----------:|:------------------------------:|
+| Intranode |        4         |     346.08 GB/s (NVL), 317.16 us |         4         |    392.64 GB/s (NVL), 542.17 us |      4      |    364.32 GB/s (NVL), 584.31 us |
+| Internode |        8         |      10.42 GB/s (RDMA), 5794 us |         8         |     10.27 GB/s (RDMA), 11392 us |      8      |     10.97 GB/s (RDMA), 10665 us |
+| Internode |        16        |       5.93 GB/s (RDMA), 18314 us |        16         |      5.92 GB/s (RDMA), 35601 us |     16      |      6.19 GB/s (RDMA), 33996 us |
+| Internode |        32        |       4.79 GB/s (RDMA), 25140 us |        32         |      4.85 GB/s (RDMA), 48132 us |     32      |      5.07 GB/s (RDMA), 46135 us |
+
+Fresh Slurm jobs: `2414616` for 1 node / EP4, `2414343` for 2 nodes / EP8, `2414361` for 4 nodes / EP16, and `2414395` for 8 nodes / EP32.
+
+
 ### Low-latency kernels with pure RDMA
 
 #### AMD MI300X with CX7 InfiniBand

@@ -1,3 +1,6 @@
 [build-system]
 requires = ["setuptools>=42", "wheel", "pybind11>=2.6.0", "nanobind>=2.0.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.ty.environment]
+extra-paths = ["/capstor/scratch/cscs/anowak/envs/apertus2-alps4-temp/python-dist-packages"]
