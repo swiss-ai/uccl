@@ -1075,6 +1075,19 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   `launch_bench.py --transport cxi --pattern cross --msg-size-kb 8`. Rank 0
   reported 1626.09 us average over the last 30 rounds and 5.16 GB/s.
 
+  NUMA affinity correction: the original all-to-all benchmark inherited the
+  p5 heuristic `numa_node = local_rank / 4`, which pinned all Apertus 4-rank
+  runs to NUMA node 0. A first attempt to scale by
+  `numa_num_configured_nodes()` was also wrong on this container because
+  configured NUMA node IDs can be sparse/not allowed, producing invalid nodes
+  such as 9, 18, and 27. PPLX Garden's topology code assigns CPU lists to
+  GPUs from the detected NUMA topology; for this benchmark's Apertus shape we
+  now use the equivalent direct CPU-block mapping over the 288 visible CPUs:
+  local rank 0 -> CPUs 0-71, rank 1 -> 72-143, rank 2 -> 144-215, rank 3 ->
+  216-287. Fresh job `2416510` forced a clean rebuild and ran the 2-node CXI
+  8 KB cross smoke; the printed affinities confirmed those four CPU blocks.
+  Rank 0 reported 1516.90 us and 5.53 GB/s.
+
 - Previous testing blocker, now intermittent/resolved for the latest attempts:
   some container `srun` attempts were rejected by Slurm before the script
   started with:
