@@ -216,11 +216,24 @@ The table reports the bottleneck bandwidth and transmit latency across node-loca
 |   Type    | FP8 Dispatch #EP | Bottleneck bandwidth & latency | BF16 Dispatch #EP | Bottleneck bandwidth & latency | Combine #EP | Bottleneck bandwidth & latency |
 |:---------:|:----------------:|:------------------------------:|:-----------------:|:------------------------------:|:-----------:|:------------------------------:|
 | Intranode |        4         |     346.08 GB/s (NVL), 317.16 us |         4         |    392.64 GB/s (NVL), 542.17 us |      4      |    364.32 GB/s (NVL), 584.31 us |
-| Internode |        8         |      10.42 GB/s (RDMA), 5794 us |         8         |     10.27 GB/s (RDMA), 11392 us |      8      |     10.97 GB/s (RDMA), 10665 us |
-| Internode |        16        |       5.93 GB/s (RDMA), 18314 us |        16         |      5.92 GB/s (RDMA), 35601 us |     16      |      6.19 GB/s (RDMA), 33996 us |
-| Internode |        32        |       4.79 GB/s (RDMA), 25140 us |        32         |      4.85 GB/s (RDMA), 48132 us |     32      |      5.07 GB/s (RDMA), 46135 us |
+| Internode |        8         |      15.21 GB/s (RDMA), 3967 us |         8         |     15.27 GB/s (RDMA), 7667 us |      8      |     25.99 GB/s (RDMA), 4501 us |
+| Internode |        16        |       17.45 GB/s (RDMA), 6222 us |        16         |      18.26 GB/s (RDMA), 11536 us |     16      |      18.63 GB/s (RDMA), 11388 us |
+| Internode |        32        |       15.40 GB/s (RDMA), 7835 us |        32         |      15.80 GB/s (RDMA), 14787 us |     32      |      15.72 GB/s (RDMA), 14882 us |
 
-Fresh Slurm jobs: `2414616` for 1 node / EP4, `2414343` for 2 nodes / EP8, `2414361` for 4 nodes / EP16, and `2414395` for 8 nodes / EP32.
+Fresh Slurm jobs: `2414616` for 1 node / EP4, `2417277` for 2 nodes / EP8, `2417296` for 4 nodes / EP16, and `2417350` for 8 nodes / EP32.
+
+Captured tuning details for the 8-node / EP32 run:
+
+| Phase | SMs | NVL chunk | RDMA chunk | Transmit latency | Notify latency | RDMA bandwidth | NVL bandwidth |
+|:-----:|:---:|:---------:|:----------:|:----------------:|:--------------:|:--------------:|:-------------:|
+| FP8 dispatch | 24 | 36 | 32 | 7835 us | 96.47 us | 15.40 GB/s | 26.29 GB/s |
+| BF16 dispatch | 24 | 24 | 32 | 14787 us | 121.38 us | 15.80 GB/s | 27.09 GB/s |
+| Combine | 24 | 3 | 32 | 14882 us | 660.41 us | 15.72 GB/s | 26.84 GB/s |
+
+The complete raw PTY logs for the 2-node and 4-node reruns were not written to
+files, so their SM/chunk/NVL-bandwidth details were not retained. Their
+bottleneck bandwidth and latency summaries above are preserved from the
+node-local `Best ...` lines.
 
 
 ### Low-latency kernels with pure RDMA
