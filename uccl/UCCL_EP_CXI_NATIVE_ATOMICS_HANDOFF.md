@@ -995,6 +995,26 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   measurements validate the new libfabric/CXI path over the current 4-GPU-node
   Apertus shape and are not a replacement for the published EFA/InfiniBand
   result tables.
+- FIFO CXI microbenchmark validation: commit `0f5299e4` refactors
+  `ep/bench/fifo` behind a shared backend API (`FifoProxy` + `FifoBackend`),
+  with `PopOnlyBackend` for the original pop-only benchmark and
+  `CxiFifoBackend` for CXI post/completion benchmarking. Fresh job `2416038`
+  built with `USE_LIBFABRIC_CXI=1` and ran:
+
+  ```bash
+  FI_PROVIDER=cxi ./benchmark -x --cxi-bytes 8 --cxi-max-outstanding 256
+  ```
+
+  The refactored CXI mode passed on GH200. It posts one 8-byte CXI write per
+  GPU FIFO command and pops the FIFO only after CQ completion. Results:
+
+  | FIFO size | 1 thread | 32 threads | 64 threads | 128 threads | 256 threads | 512 threads | 1024 threads |
+  |:---------:|:--------:|:----------:|:----------:|:-----------:|:-----------:|:-----------:|:------------:|
+  | 2048 | 0.11 Mops/s | 2.20 Mops/s | 2.59 Mops/s | 2.66 Mops/s | 2.74 Mops/s | 2.79 Mops/s | 2.79 Mops/s |
+  | 4096 | 0.12 Mops/s | 2.19 Mops/s | 2.58 Mops/s | 2.54 Mops/s | 2.78 Mops/s | 2.80 Mops/s | 2.81 Mops/s |
+
+  The CXI FIFO benchmark therefore plateaus around 2.8 Mops/s completed
+  8-byte CXI writes with 4 proxy threads and 256 outstanding writes per proxy.
 
 - Previous testing blocker, now intermittent/resolved for the latest attempts:
   some container `srun` attempts were rejected by Slurm before the script
