@@ -1025,8 +1025,11 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
 
   The CXI path uses the existing TCP control plane for endpoint-name/key
   exchange, CUDA HMEM MR registration, `FI_EP_RDM`, `fi_write` for each remote
-  all-to-all message, and CQ polling for completions. Fresh compile-only job
-  `2416171` passed. Fresh 2-node job `2416196` passed with 4 ranks per node:
+  all-to-all message, and CQ polling for completions. The benchmark now accepts
+  runtime message size and traffic pattern arguments through
+  `launch_bench.py --msg-size-kb <KB> --pattern <cross|rail>`, so it can match
+  the EFA all-to-all sweep shape. Fresh compile-only job `2416171` passed.
+  Fresh 2-node job `2416196` passed with 4 ranks per node:
 
   ```bash
   torchrun --nnodes=2 --nproc_per_node=4 ... launch_bench.py --transport cxi
@@ -1037,6 +1040,28 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   9.85 GB/s. Other rank averages: rank 1 746.49 us, rank 2 733.67 us, rank 3
   745.66 us, rank 4 722.31 us, rank 5 697.17 us, rank 6 716.96 us, rank 7
   710.41 us.
+
+  The EFA-style all-to-all sweep was then run on two Apertus GH200/CXI nodes
+  with four ranks per node, one CXI NIC per GPU, and nominal per-NIC bandwidth
+  of 25 GB/s (200 Gb/s). `NUM_MSGS=128`, `TOPK=8`, and `WINDOW_SIZE=2048`
+  stayed fixed; only payload size and traffic pattern changed. Fresh job
+  `2416234` compiled the benchmark, fresh job `2416238` ran the main sweep,
+  and fresh job `2416369` reran the missing 64 KB and 128 KB rail-aligned
+  points. Fresh job `2416385` passed post-edit compile validation. Results
+  were recorded in `ep/bench/alltoall/efa_alltoall_results.md`:
+
+  | Message size | Cross-rail | Rail-aligned |
+  | ------------ | ---------- | ------------ |
+  | 8 KB | 5.12 GB/s | 5.38 GB/s |
+  | 16 KB | 5.25 GB/s | 4.84 GB/s |
+  | 32 KB | 5.46 GB/s | 4.73 GB/s |
+  | 64 KB | 5.57 GB/s | 5.08 GB/s |
+  | 128 KB | 5.58 GB/s | 5.31 GB/s |
+  | 256 KB | 5.56 GB/s | 5.24 GB/s |
+  | 512 KB | 5.63 GB/s | 5.51 GB/s |
+  | 1024 KB | 5.65 GB/s | 5.65 GB/s |
+  | 2048 KB | 5.68 GB/s | 5.51 GB/s |
+  | 4096 KB | 5.64 GB/s | 5.37 GB/s |
 
 - Previous testing blocker, now intermittent/resolved for the latest attempts:
   some container `srun` attempts were rejected by Slurm before the script

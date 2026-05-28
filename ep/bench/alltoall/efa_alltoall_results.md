@@ -47,7 +47,58 @@ Based on the lastest code (random scenario).
 
 We find 9.930 GB/s vs. 15.673 GB/s for cross-rail vs. rail-aligned. 
 
+### On two CSCS Apertus GH200 nodes with Slingshot/CXI
+
+Based on the `nk/cxi` libfabric/CXI path. These runs used two nodes, four
+ranks per node, one CXI NIC per GPU, and nominal per-NIC bandwidth of
+25 GB/s (200 Gb/s). The benchmark keeps `NUM_MSGS=128`, `TOPK=8`, and
+`WINDOW_SIZE=2048`, and sweeps only the per-message payload size.
+
+The CXI backend was built with:
+
+```bash
+make USE_LIBFABRIC_CXI=1 CUDA_HOME=/usr/local/cuda benchmark
+```
+
+The sweep command used:
+
+```bash
+torchrun --nnodes=2 --nproc_per_node=4 ... \
+  launch_bench.py --transport cxi --pattern <cross|rail> --msg-size-kb <KB>
+```
+
+Fresh Slurm jobs: `2416234` for initial compile validation, `2416238` for the
+main two-node sweep, `2416369` for a fresh rerun of the missing 64 KB and
+128 KB rail-aligned points, and `2416385` for post-edit compile validation.
+
+* Cross-rail all-to-all results (Unit: GB/s):
+    | Message Size (KB) | 2 Nodes (GH200/CXI) |
+    |-------------------|---------------------|
+    | 8                 | 5.12                |
+    | 16                | 5.25                |
+    | 32                | 5.46                |
+    | 64                | 5.57                |
+    | 128               | 5.58                |
+    | 256               | 5.56                |
+    | 512               | 5.63                |
+    | 1024              | 5.65                |
+    | 2048              | 5.68                |
+    | 4096              | 5.64                |
+
+* Rail-aligned all-to-all results (Unit: GB/s):
+    | Message Size (KB) | 2 Nodes (GH200/CXI) |
+    | ----------------- | ------------------- |
+    | 8                 | 5.38                |
+    | 16                | 4.84                |
+    | 32                | 4.73                |
+    | 64                | 5.08                |
+    | 128               | 5.31                |
+    | 256               | 5.24                |
+    | 512               | 5.51                |
+    | 1024              | 5.65                |
+    | 2048              | 5.51                |
+    | 4096              | 5.37                |
+
 ### To reproduce
 
 Run [test_alltoall_rail.cpp](./test_alltoall_rail.cpp) and [test_alltoall.cpp](test_alltoall.cpp).
-
