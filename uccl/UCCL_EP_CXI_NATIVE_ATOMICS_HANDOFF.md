@@ -1028,7 +1028,13 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   all-to-all message, and CQ polling for completions. The benchmark now accepts
   runtime message size and traffic pattern arguments through
   `launch_bench.py --msg-size-kb <KB> --pattern <cross|rail>`, so it can match
-  the EFA all-to-all sweep shape. Fresh compile-only job `2416171` passed.
+  the EFA all-to-all sweep shape. The verbs and CXI implementations are now
+  behind a small benchmark-local backend API:
+  `AllToAllBackend::{setup, begin_round, post_write, poll_send_completions,
+  cleanup}`. The shared benchmark runner owns dispatch-table traversal,
+  timing, inflight-window accounting, barriers, and throughput reporting, while
+  each backend owns endpoint setup, transport-specific post/poll details, and
+  cleanup. Fresh compile-only job `2416171` passed.
   Fresh 2-node job `2416196` passed with 4 ranks per node:
 
   ```bash
@@ -1062,6 +1068,12 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   | 1024 KB | 5.65 GB/s | 5.65 GB/s |
   | 2048 KB | 5.68 GB/s | 5.51 GB/s |
   | 4096 KB | 5.64 GB/s | 5.37 GB/s |
+
+  Backend-API refactor validation: fresh job `2416464` forced a clean rebuild
+  with `make clean && make USE_LIBFABRIC_CXI=1 CUDA_HOME=/usr/local/cuda
+  benchmark`, then ran a 2-node, 4-rank-per-node CXI smoke benchmark with
+  `launch_bench.py --transport cxi --pattern cross --msg-size-kb 8`. Rank 0
+  reported 1626.09 us average over the last 30 rounds and 5.16 GB/s.
 
 - Previous testing blocker, now intermittent/resolved for the latest attempts:
   some container `srun` attempts were rejected by Slurm before the script
