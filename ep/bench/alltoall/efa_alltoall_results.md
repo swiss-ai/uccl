@@ -1,6 +1,24 @@
 # RDMA All-to-All Throughput Results
 
-Both tests keep the same number of total messages sent by each GPU, and the same max inflight messaages sent by each GPU. The difference is that in cross-rail case, one GPU's peers are any GPUs in other nodes; in rail-aligned case, one GPU's peers are only rail-aligned GPUs in other nodes. 
+Both tests keep the same number of total messages sent by each GPU, and the
+same max inflight messages sent by each GPU. The difference is only how the
+destination rank table is generated.
+
+In this benchmark, a rail is the local GPU/NIC index inside a node. With two
+nodes and four ranks per node, ranks `0..3` are node 0 rails `0..3`, and ranks
+`4..7` are node 1 rails `0..3`.
+
+`--pattern cross` generates random cross-node destinations. A rank may send to
+any rank on another node, and same-node destinations are rejected. For example,
+rank `0` can send to ranks `4`, `5`, `6`, or `7`; rank `1` can also send to
+ranks `4`, `5`, `6`, or `7`. This exercises traffic that may cross from one
+local GPU/NIC rail to a different remote GPU/NIC rail.
+
+`--pattern rail` generates rail-aligned destinations. A rank sends to the same
+local rail on a remote node. With two nodes and four ranks per node, rank `0`
+sends to rank `4`, rank `1` sends to rank `5`, rank `2` sends to rank `6`, and
+rank `3` sends to rank `7`. On more than two nodes, the benchmark rotates
+through the remote nodes but preserves the same local rail index.
 
 Message size of 8KB would roughly represent DeepEP/UCCL-EP low-latency performance. 
 
