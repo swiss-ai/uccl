@@ -8,6 +8,7 @@
  *    -b: Burst mode (no polling)
  *    -r: Random mode (each thread randomly selects a FIFO)
  *    -c: Control Mops mode, fifo evaluation for mops vs latency
+ *    -x: CXI mode, proxy posts one small CXI write per FIFO command
  */
 
 #include "../../include/fifo.hpp"
@@ -18,12 +19,24 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 #include <cuda_runtime.h>
+
+#ifdef USE_LIBFABRIC_CXI
+#include <rdma/fabric.h>
+#include <rdma/fi_cm.h>
+#include <rdma/fi_domain.h>
+#include <rdma/fi_endpoint.h>
+#include <rdma/fi_eq.h>
+#include <rdma/fi_rma.h>
+#endif
 
 using namespace mscclpp;
 
@@ -39,6 +52,8 @@ struct BenchmarkConfig {
   int mode;
   uint64_t sleep_cycles;
   float target_mops;
+  uint32_t cxi_bytes;
+  uint32_t cxi_max_outstanding;
 };
 
 // Metrics collected from GPU
@@ -52,13 +67,41 @@ struct ThreadMetrics {
 // Maximum number of latency samples per thread for percentile calculation
 constexpr int MAX_LATENCY_SAMPLES = 10000;
 
-// Host-side proxy that polls and pops from multiple FIFOs
-class MultiFifoProxy {
+class FifoBackend {
  public:
-  MultiFifoProxy(std::vector<Fifo*> fifos)
-      : fifos_(fifos), stop_(false), processed_count_(0) {}
+  virtual ~FifoBackend() = default;
+  virtual uint64_t progress() = 0;
+  virtual bool hasPending() const = 0;
+  virtual bool canSubmit(size_t fifo_idx) const = 0;
+  virtual uint64_t submit(size_t fifo_idx, Fifo& fifo,
+                          ProxyTrigger trigger) = 0;
+};
 
-  void start() { thread_ = std::thread(&MultiFifoProxy::run, this); }
+class PopOnlyBackend final : public FifoBackend {
+ public:
+  uint64_t progress() override { return 0; }
+  bool hasPending() const override { return false; }
+  bool canSubmit(size_t) const override { return true; }
+  uint64_t submit(size_t, Fifo& fifo, ProxyTrigger trigger) override {
+    // Flip back the MSB that was set by the device. The plain FIFO benchmark
+    // does not consume the payload, but keep the same trigger handling shape
+    // as the production proxy.
+    trigger.snd ^= (uint64_t{1} << uint64_t{63});
+    fifo.pop();
+    return 1;
+  }
+};
+
+// Host-side proxy that polls FIFOs and delegates work to a backend.
+class FifoProxy {
+ public:
+  FifoProxy(std::vector<Fifo*> fifos, std::unique_ptr<FifoBackend> backend)
+      : fifos_(std::move(fifos)),
+        backend_(std::move(backend)),
+        stop_(false),
+        processed_count_(0) {}
+
+  void start() { thread_ = std::thread(&FifoProxy::run, this); }
 
   void stop() {
     stop_ = true;
@@ -71,31 +114,257 @@ class MultiFifoProxy {
 
  private:
   void run() {
-    while (!stop_) {
-      // Round-robin poll all FIFOs
-      for (auto* fifo : fifos_) {
-        ProxyTrigger trigger = fifo->poll();
+    while (!stop_ || backend_->hasPending()) {
+      processed_count_ += backend_->progress();
+      if (stop_) continue;
 
-        // Check if trigger is valid (fst != 0)
-        if (trigger.fst != 0) {
-          // Flip back the MSB that was set by the device
-          trigger.snd ^= ((uint64_t)1 << (uint64_t)63);
-
-          // Process the trigger (in real use, this would dispatch work)
-          processed_count_++;
-
-          // Pop the trigger
-          fifo->pop();
-        }
+      for (size_t i = 0; i < fifos_.size(); ++i) {
+        if (!backend_->canSubmit(i)) continue;
+        ProxyTrigger trigger = fifos_[i]->poll();
+        if (trigger.fst == 0) continue;
+        processed_count_ += backend_->submit(i, *fifos_[i], trigger);
       }
     }
   }
 
   std::vector<Fifo*> fifos_;
+  std::unique_ptr<FifoBackend> backend_;
   std::thread thread_;
   std::atomic<bool> stop_;
   std::atomic<uint64_t> processed_count_;
 };
+
+#ifdef USE_LIBFABRIC_CXI
+namespace {
+
+void checkFi(int rc, char const* what) {
+  if (rc < 0) {
+    throw std::runtime_error(std::string(what) + " failed: " +
+                             fi_strerror(-rc));
+  }
+}
+
+struct CxiEndpoint {
+  fid_fabric* fabric = nullptr;
+  fid_domain* domain = nullptr;
+  fid_ep* ep = nullptr;
+  fid_cq* cq = nullptr;
+  fid_av* av = nullptr;
+  fi_info* info = nullptr;
+  std::vector<uint8_t> name;
+  fi_addr_t peer = FI_ADDR_UNSPEC;
+};
+
+class CxiLoopback {
+ public:
+  CxiLoopback(size_t bytes, size_t max_outstanding)
+      : bytes_(bytes),
+        src_(std::max<size_t>(bytes, 8), 0xab),
+        dst_(std::max<size_t>(bytes, 8), 0),
+        contexts_(max_outstanding) {
+    openEndpoint(a_);
+    openEndpoint(b_);
+    connectEndpoints(a_, b_);
+    src_mr_ = registerMr(a_, src_.data(), src_.size());
+    dst_mr_ = registerMr(b_, dst_.data(), dst_.size());
+  }
+
+  ~CxiLoopback() { close(); }
+
+  CxiLoopback(CxiLoopback const&) = delete;
+  CxiLoopback& operator=(CxiLoopback const&) = delete;
+
+  bool canPost() const { return inflight_ < contexts_.size(); }
+
+  bool post(size_t fifo_idx, Fifo* fifo) {
+    if (inflight_ >= contexts_.size()) return false;
+    WriteContext& ctx = contexts_[(next_context_++) % contexts_.size()];
+    ctx.fifo = fifo;
+    ctx.fifo_idx = fifo_idx;
+    ctx.in_use = true;
+    ssize_t rc = fi_write(a_.ep, src_.data(), bytes_, fi_mr_desc(src_mr_),
+                          a_.peer, 0, fi_mr_key(dst_mr_), &ctx.context);
+    checkFi(static_cast<int>(rc), "fi_write(CXI FIFO bench)");
+    ++inflight_;
+    return true;
+  }
+
+  uint64_t poll(std::vector<uint8_t>& pending) {
+    uint64_t completed = 0;
+    fi_cq_entry entries[64] = {};
+    for (;;) {
+      ssize_t rc = fi_cq_read(a_.cq, entries, 64);
+      if (rc == -FI_EAGAIN) return completed;
+      if (rc < 0) {
+        fi_cq_err_entry err = {};
+        ssize_t erc = fi_cq_readerr(a_.cq, &err, 0);
+        if (erc >= 0) {
+          throw std::runtime_error(
+              std::string("CXI FIFO bench CQ error: ") +
+              fi_cq_strerror(a_.cq, err.prov_errno, err.err_data, nullptr, 0));
+        }
+        checkFi(static_cast<int>(rc), "fi_cq_read(CXI FIFO bench)");
+      }
+      for (ssize_t i = 0; i < rc; ++i) {
+        auto* ctx = static_cast<WriteContext*>(entries[i].op_context);
+        if (!ctx || !ctx->in_use || !ctx->fifo) {
+          throw std::runtime_error("invalid CXI FIFO bench completion context");
+        }
+        ctx->fifo->pop();
+        if (ctx->fifo_idx < pending.size()) pending[ctx->fifo_idx] = 0;
+        ctx->fifo = nullptr;
+        ctx->fifo_idx = static_cast<size_t>(-1);
+        ctx->in_use = false;
+        --inflight_;
+        ++completed;
+      }
+    }
+  }
+
+  size_t inflight() const { return inflight_; }
+
+ private:
+  struct WriteContext {
+    fi_context context = {};
+    Fifo* fifo = nullptr;
+    size_t fifo_idx = static_cast<size_t>(-1);
+    bool in_use = false;
+  };
+
+  static void openEndpoint(CxiEndpoint& e) {
+    fi_info* hints = fi_allocinfo();
+    if (!hints) throw std::runtime_error("fi_allocinfo failed");
+    hints->caps = FI_RMA | FI_WRITE | FI_REMOTE_WRITE | FI_LOCAL_COMM |
+                  FI_REMOTE_COMM;
+    hints->mode = FI_CONTEXT;
+    hints->ep_attr->type = FI_EP_RDM;
+    hints->fabric_attr->prov_name = strdup("cxi");
+    hints->domain_attr->mr_mode =
+        FI_MR_ENDPOINT | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
+    hints->domain_attr->threading = FI_THREAD_DOMAIN;
+
+    int rc = fi_getinfo(FI_VERSION(1, 15), nullptr, nullptr, 0, hints,
+                        &e.info);
+    fi_freeinfo(hints);
+    checkFi(rc, "fi_getinfo(cxi)");
+
+    checkFi(fi_fabric(e.info->fabric_attr, &e.fabric, nullptr), "fi_fabric");
+    checkFi(fi_domain(e.fabric, e.info, &e.domain, nullptr), "fi_domain");
+
+    fi_cq_attr cq_attr = {};
+    cq_attr.format = FI_CQ_FORMAT_CONTEXT;
+    cq_attr.size = 131072;
+    checkFi(fi_cq_open(e.domain, &cq_attr, &e.cq, nullptr), "fi_cq_open");
+
+    fi_av_attr av_attr = {};
+    av_attr.type = FI_AV_MAP;
+    checkFi(fi_av_open(e.domain, &av_attr, &e.av, nullptr), "fi_av_open");
+
+    checkFi(fi_endpoint(e.domain, e.info, &e.ep, nullptr), "fi_endpoint");
+    checkFi(fi_ep_bind(e.ep, &e.cq->fid, FI_TRANSMIT | FI_RECV),
+            "fi_ep_bind(cq)");
+    checkFi(fi_ep_bind(e.ep, &e.av->fid, 0), "fi_ep_bind(av)");
+    checkFi(fi_enable(e.ep), "fi_enable");
+
+    size_t name_len = 0;
+    rc = fi_getname(&e.ep->fid, nullptr, &name_len);
+    if (rc != -FI_ETOOSMALL) checkFi(rc, "fi_getname(size)");
+    e.name.resize(name_len);
+    checkFi(fi_getname(&e.ep->fid, e.name.data(), &name_len), "fi_getname");
+    e.name.resize(name_len);
+  }
+
+  static void connectEndpoints(CxiEndpoint& a, CxiEndpoint& b) {
+    int rc = fi_av_insert(a.av, b.name.data(), 1, &a.peer, 0, nullptr);
+    if (rc != 1) {
+      if (rc < 0) checkFi(rc, "fi_av_insert(a)");
+      throw std::runtime_error("fi_av_insert(a) inserted no address");
+    }
+    rc = fi_av_insert(b.av, a.name.data(), 1, &b.peer, 0, nullptr);
+    if (rc != 1) {
+      if (rc < 0) checkFi(rc, "fi_av_insert(b)");
+      throw std::runtime_error("fi_av_insert(b) inserted no address");
+    }
+  }
+
+  static fid_mr* registerMr(CxiEndpoint& e, void* ptr, size_t len) {
+    iovec iov = {};
+    iov.iov_base = ptr;
+    iov.iov_len = len;
+    fi_mr_attr attr = {};
+    attr.mr_iov = &iov;
+    attr.iov_count = 1;
+    attr.access = FI_SEND | FI_RECV | FI_WRITE | FI_READ | FI_REMOTE_WRITE |
+                  FI_REMOTE_READ;
+    fid_mr* mr = nullptr;
+    checkFi(fi_mr_regattr(e.domain, &attr, 0, &mr), "fi_mr_regattr");
+    checkFi(fi_mr_bind(mr, &e.ep->fid, 0), "fi_mr_bind");
+    checkFi(fi_control(&mr->fid, FI_ENABLE, nullptr),
+            "fi_control(FI_ENABLE)");
+    return mr;
+  }
+
+  static void closeEndpoint(CxiEndpoint& e) {
+    if (e.ep) fi_close(&e.ep->fid);
+    if (e.av) fi_close(&e.av->fid);
+    if (e.cq) fi_close(&e.cq->fid);
+    if (e.domain) fi_close(&e.domain->fid);
+    if (e.fabric) fi_close(&e.fabric->fid);
+    if (e.info) fi_freeinfo(e.info);
+    e = {};
+  }
+
+  void close() {
+    if (src_mr_) fi_close(&src_mr_->fid);
+    if (dst_mr_) fi_close(&dst_mr_->fid);
+    src_mr_ = nullptr;
+    dst_mr_ = nullptr;
+    closeEndpoint(a_);
+    closeEndpoint(b_);
+  }
+
+  size_t bytes_ = 0;
+  CxiEndpoint a_;
+  CxiEndpoint b_;
+  fid_mr* src_mr_ = nullptr;
+  fid_mr* dst_mr_ = nullptr;
+  std::vector<uint8_t> src_;
+  std::vector<uint8_t> dst_;
+  std::vector<WriteContext> contexts_;
+  size_t next_context_ = 0;
+  size_t inflight_ = 0;
+};
+
+class CxiFifoBackend final : public FifoBackend {
+ public:
+  CxiFifoBackend(size_t num_fifos, uint32_t bytes, uint32_t max_outstanding)
+      : cxi_(bytes, max_outstanding), pending_(num_fifos, 0) {}
+
+  uint64_t progress() override { return cxi_.poll(pending_); }
+
+  bool hasPending() const override { return cxi_.inflight() > 0; }
+
+  bool canSubmit(size_t fifo_idx) const override {
+    return fifo_idx < pending_.size() && pending_[fifo_idx] == 0 &&
+           cxi_.canPost();
+  }
+
+  uint64_t submit(size_t fifo_idx, Fifo& fifo, ProxyTrigger trigger) override {
+    (void)trigger;
+    pending_[fifo_idx] = 1;
+    if (!cxi_.post(fifo_idx, &fifo)) {
+      pending_[fifo_idx] = 0;
+    }
+    return 0;
+  }
+
+ private:
+  CxiLoopback cxi_;
+  std::vector<uint8_t> pending_;
+};
+
+}  // namespace
+#endif
 
 // Print throughput results
 void printThroughputResults(
@@ -128,6 +397,15 @@ void printThroughputResults(
     printf("%11.1f | %7u | %11.2f | %16.0f | %16.0f\n", config.target_mops,
            config.num_threads / 32, throughput_mops, avg_latency_ns,
            p99_latency_ns);
+    return;
+  }
+
+  if (config.mode == 5) {
+    printf("Threads: %4u | FIFO Size: %4u | CXI write bytes: %4u | ",
+           config.num_threads, config.fifo_size, config.cxi_bytes);
+    printf("GPU Pushes: %6.2f Mops/s | CXI Completed: %6.2f Mops/s",
+           throughput_mops, proxy_throughput_mops);
+    printf("\n");
     return;
   }
 
@@ -213,14 +491,27 @@ void runBenchmark(BenchmarkConfig const& config) {
   cudaMallocManaged(&d_stop_flag, sizeof(bool));
   *d_stop_flag = false;
 
-  // Start 4 proxy threads, each managing 8 FIFOs
-  std::vector<std::unique_ptr<MultiFifoProxy>> proxies;
+  // Start 4 proxy threads, each managing 8 FIFOs.
+  std::vector<std::unique_ptr<FifoProxy>> proxies;
   for (int i = 0; i < NUM_PROXIES; i++) {
     std::vector<Fifo*> proxy_fifos;
     for (int j = 0; j < FIFOS_PER_PROXY; j++) {
       proxy_fifos.push_back(fifos[i * FIFOS_PER_PROXY + j].get());
     }
-    proxies.push_back(std::make_unique<MultiFifoProxy>(proxy_fifos));
+    std::unique_ptr<FifoBackend> backend;
+    if (config.mode == 5) {
+#ifdef USE_LIBFABRIC_CXI
+      backend = std::make_unique<CxiFifoBackend>(
+          proxy_fifos.size(), config.cxi_bytes, config.cxi_max_outstanding);
+#else
+      throw std::runtime_error(
+          "FIFO CXI mode requires building with USE_LIBFABRIC_CXI=1");
+#endif
+    } else {
+      backend = std::make_unique<PopOnlyBackend>();
+    }
+    proxies.push_back(
+        std::make_unique<FifoProxy>(std::move(proxy_fifos), std::move(backend)));
     proxies.back()->start();
   }
 
@@ -230,7 +521,7 @@ void runBenchmark(BenchmarkConfig const& config) {
 
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  if (config.mode == 0) {
+  if (config.mode == 0 || config.mode == 5) {
     // Use throughput kernel with batching
     launchFifoKernel(grid, block, d_fifo_handles, d_metrics, config.num_threads,
                      config.test_duration_ms, config.warmup_iterations,
@@ -340,8 +631,10 @@ int main(int argc, char** argv) {
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, local_rank);
 
-  // Get GPU clock rate (clockRate is in kHz)
-  float gpu_clock_ghz = prop.clockRate / 1000000.0f;
+  // Get GPU clock rate (attribute is in kHz).
+  int clock_rate_khz = 0;
+  cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, local_rank);
+  float gpu_clock_ghz = clock_rate_khz / 1000000.0f;
 
   printf("========================================\n");
   printf("FIFO Performance Benchmark\n");
@@ -362,7 +655,9 @@ int main(int argc, char** argv) {
                             .measure_latency = true,
                             .mode = 0,
                             .sleep_cycles = 0,
-                            .target_mops = 0.0f};
+                            .target_mops = 0.0f,
+                            .cxi_bytes = 8,
+                            .cxi_max_outstanding = 1024};
 
   // Parse command line arguments
   for (int i = 1; i < argc; i++) {
@@ -374,6 +669,14 @@ int main(int argc, char** argv) {
       config.mode = 3;
     } else if (std::string(argv[i]) == "-c") {
       config.mode = 4;
+    } else if (std::string(argv[i]) == "-x") {
+      config.mode = 5;
+    } else if (std::string(argv[i]) == "--cxi-bytes" && i + 1 < argc) {
+      config.cxi_bytes = static_cast<uint32_t>(std::atoi(argv[++i]));
+    } else if (std::string(argv[i]) == "--cxi-max-outstanding" &&
+               i + 1 < argc) {
+      config.cxi_max_outstanding =
+          static_cast<uint32_t>(std::atoi(argv[++i]));
     }
   }
 
@@ -421,6 +724,12 @@ int main(int argc, char** argv) {
       runBenchmark(config);
     }
     return 0;
+  } else if (config.mode == 5) {
+    printf("--- FIFO CXI Post/Completion Tests ---\n");
+    printf(
+        "(Proxy posts one %u-byte CXI write per FIFO command and pops the "
+        "FIFO after CQ completion; max outstanding per proxy: %u)\n\n",
+        config.cxi_bytes, config.cxi_max_outstanding);
   }
 
   for (auto fifo_size : fifo_sizes) {

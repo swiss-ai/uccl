@@ -9,7 +9,10 @@ HIPCC := $(ROCM_PATH)/bin/hipcc
 CXX := g++
 
 # Auto-detect GPU architecture
-GPU_ARCH := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | sed 's/\.//' || echo "90")
+GPU_ARCH ?= $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | sed 's/\.//')
+ifeq ($(strip $(GPU_ARCH)),)
+  GPU_ARCH := 90
+endif
 
 TARGET := benchmark
 NETWORK_BENCH_EFA := network_latency_bench_efa
@@ -38,6 +41,16 @@ INCLUDES += -I$(CUDA_PATH)/include
 # Libraries
 LIBS := -lpthread -lcudart -lcuda -lnuma
 LIBS += -L$(CUDA_PATH)/lib64
+
+USE_LIBFABRIC_CXI ?= 0
+ifeq ($(USE_LIBFABRIC_CXI),1)
+  CXX_FLAGS += -DUSE_LIBFABRIC_CXI
+  ifneq ($(LIBFABRIC_HOME),)
+    INCLUDES += -I$(LIBFABRIC_HOME)/include
+    LIBS += -L$(LIBFABRIC_HOME)/lib
+  endif
+  LIBS += -lfabric
+endif
 
 HIP_LIBS := -lpthread -lnuma -libverbs
 HIP_LIBS += -L$(ROCM_PATH)/lib -lamdhip64
@@ -94,4 +107,3 @@ clean:
 	@echo "Done."
 
 .PHONY: all clean
-
