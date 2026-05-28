@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd /users/anowak/open_source/uccl/ep
+
+export CUDA_HOME=/usr/local/cuda
+export TORCH_CUDA_ARCH_LIST=9.0
+export USE_LIBFABRIC_CXI=1
+export UCCL_EP_TRANSPORT=cxi
+export FI_PROVIDER=cxi
+export NUM_MAX_NVL_PEERS="${NUM_MAX_NVL_PEERS:-4}"
+export FI_CXI_DEFAULT_CQ_SIZE="${FI_CXI_DEFAULT_CQ_SIZE:-131072}"
+export FI_CXI_DEFAULT_TX_SIZE="${FI_CXI_DEFAULT_TX_SIZE:-16384}"
+export FI_CXI_OFLOW_BUF_SIZE="${FI_CXI_OFLOW_BUF_SIZE:-1073741824}"
+export FI_CXI_RDZV_THRESHOLD="${FI_CXI_RDZV_THRESHOLD:-1073741824}"
+export FI_CXI_RX_MATCH_MODE="${FI_CXI_RX_MATCH_MODE:-software}"
+export FI_MR_CACHE_MONITOR="${FI_MR_CACHE_MONITOR:-userfaultfd}"
+export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
+export UCCL_PROXY_TRACE="${UCCL_PROXY_TRACE:-1}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-6}"
+export MASTER_PORT="${MASTER_PORT:-29674}"
+
+master_host="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
+master_addr="${MASTER_ADDR:-${master_host}}"
+node_rank="${SLURM_NODEID:?SLURM_NODEID is required}"
+nnodes="${SLURM_NNODES:?SLURM_NNODES is required}"
+nproc_per_node="${NPROC_PER_NODE:-4}"
+
+num_tokens="${HT_NUM_TOKENS:-512}"
+hidden="${HT_HIDDEN:-2048}"
+num_topk="${HT_NUM_TOPK:-4}"
+num_experts="${HT_NUM_EXPERTS:-64}"
+
+echo "[cxi-ht] host=$(hostname -f) node_rank=${node_rank}/${nnodes} master=${master_addr}:${MASTER_PORT}"
+echo "[cxi-ht] transport=${UCCL_EP_TRANSPORT} provider=${FI_PROVIDER} nvl_peers=${NUM_MAX_NVL_PEERS} nproc=${nproc_per_node}"
+echo "[cxi-ht] shape tokens=${num_tokens} hidden=${hidden} topk=${num_topk} experts=${num_experts}"
+echo "[cxi-ht] gpus=$(python3 -c 'import torch; print(torch.cuda.device_count())')"
+
+build_lock="/iopsstor/scratch/cscs/anowak/uccl_ep_cxi_build.lock"
+(
+  flock 9
+  python3 -m pip install nanobind
+  USE_LIBFABRIC_CXI=1 NUM_MAX_NVL_PEERS="${NUM_MAX_NVL_PEERS}" \
+    CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST=9.0 \
+    python3 setup.py install
+) 9>"${build_lock}"
+
+python3 -c "import torch; import uccl.ep; print('[cxi-ht] import ok torch', torch.__version__, 'gpus', torch.cuda.device_count(), flush=True)"
+
+torchrun \
+  --nnodes="${nnodes}" \
+  --nproc_per_node="${nproc_per_node}" \
+  --node_rank="${node_rank}" \
+  --master_addr="${master_addr}" \
+  --master_port="${MASTER_PORT}" \
+  bench/test_internode.py \
+  --num-tokens "${num_tokens}" \
+  --hidden "${hidden}" \
+  --num-topk "${num_topk}" \
+  --num-experts "${num_experts}"
