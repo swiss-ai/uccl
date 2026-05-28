@@ -102,6 +102,35 @@ fid_mr* register_host_mr(fid_domain* domain, fid_ep* ep, void* ptr, size_t len,
   return mr;
 }
 
+fi_info* select_cxi_info(fi_info* infos, int local_rank) {
+  char target[32];
+  std::snprintf(target, sizeof(target), "cxi%d", local_rank);
+
+  for (fi_info* cur = infos; cur; cur = cur->next) {
+    char const* name =
+        (cur->domain_attr && cur->domain_attr->name) ? cur->domain_attr->name
+                                                     : "";
+    if (std::strcmp(name, target) == 0) {
+      std::fprintf(stderr, "Selected CXI domain %s for local_rank %d\n", name,
+                   local_rank);
+      return cur;
+    }
+  }
+
+  std::string available;
+  for (fi_info* cur = infos; cur; cur = cur->next) {
+    char const* name =
+        (cur->domain_attr && cur->domain_attr->name) ? cur->domain_attr->name
+                                                     : "<unknown>";
+    if (!available.empty()) available += " ";
+    available += name;
+  }
+  throw std::runtime_error("Could not find required CXI domain " +
+                           std::string(target) + " for local_rank " +
+                           std::to_string(local_rank) +
+                           "; available domains: " + available);
+}
+
 }  // namespace
 
 void CxiTransport::init(ProxyCtx& ctx) {
@@ -125,8 +154,11 @@ void CxiTransport::init(ProxyCtx& ctx) {
   check_fi(rc, "fi_getinfo(cxi)");
 
   try {
-    check_fi(fi_fabric(info->fabric_attr, &fabric_, nullptr), "fi_fabric");
-    check_fi(fi_domain(fabric_, info, &domain_, nullptr), "fi_domain");
+    fi_info* selected = select_cxi_info(info, ctx.local_rank);
+
+    check_fi(fi_fabric(selected->fabric_attr, &fabric_, nullptr),
+             "fi_fabric");
+    check_fi(fi_domain(fabric_, selected, &domain_, nullptr), "fi_domain");
 
     fi_cq_attr cq_attr = {};
     cq_attr.format = FI_CQ_FORMAT_DATA;
@@ -137,7 +169,7 @@ void CxiTransport::init(ProxyCtx& ctx) {
     av_attr.type = FI_AV_MAP;
     check_fi(fi_av_open(domain_, &av_attr, &av_, nullptr), "fi_av_open");
 
-    check_fi(fi_endpoint(domain_, info, &ep_, nullptr), "fi_endpoint");
+    check_fi(fi_endpoint(domain_, selected, &ep_, nullptr), "fi_endpoint");
     check_fi(fi_ep_bind(ep_, &cq_->fid, FI_TRANSMIT | FI_RECV),
              "fi_ep_bind(cq)");
     check_fi(fi_ep_bind(ep_, &av_->fid, 0), "fi_ep_bind(av)");
