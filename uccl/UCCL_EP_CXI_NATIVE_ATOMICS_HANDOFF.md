@@ -1015,6 +1015,28 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
 
   The CXI FIFO benchmark therefore plateaus around 2.8 Mops/s completed
   8-byte CXI writes with 4 proxy threads and 256 outstanding writes per proxy.
+- All-to-all CXI microbenchmark validation: `ep/bench/alltoall` now has a
+  libfabric/CXI backend selected with `--transport cxi` in `launch_bench.py`
+  and built with:
+
+  ```bash
+  make USE_LIBFABRIC_CXI=1 CUDA_HOME=/usr/local/cuda benchmark
+  ```
+
+  The CXI path uses the existing TCP control plane for endpoint-name/key
+  exchange, CUDA HMEM MR registration, `FI_EP_RDM`, `fi_write` for each remote
+  all-to-all message, and CQ polling for completions. Fresh compile-only job
+  `2416171` passed. Fresh 2-node job `2416196` passed with 4 ranks per node:
+
+  ```bash
+  torchrun --nnodes=2 --nproc_per_node=4 ... launch_bench.py --transport cxi
+  ```
+
+  Shape: 128 messages, top-k 8, 7168-byte messages, 2 nodes x 4 ranks. Rank 0
+  average over the last 30 rounds was 744.88 us and the benchmark reported
+  9.85 GB/s. Other rank averages: rank 1 746.49 us, rank 2 733.67 us, rank 3
+  745.66 us, rank 4 722.31 us, rank 5 697.17 us, rank 6 716.96 us, rank 7
+  710.41 us.
 
 - Previous testing blocker, now intermittent/resolved for the latest attempts:
   some container `srun` attempts were rejected by Slurm before the script
