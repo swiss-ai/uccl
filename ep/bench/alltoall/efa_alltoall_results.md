@@ -86,36 +86,40 @@ torchrun --nnodes=2 --nproc_per_node=4 ... \
 ```
 
 Fresh Slurm jobs: `2416234` for initial compile validation, `2416238` for the
-main two-node sweep, `2416369` for a fresh rerun of the missing 64 KB and
-128 KB rail-aligned points, and `2416385` for post-edit compile validation.
+first two-node sweep, `2416369` for a fresh rerun of the missing 64 KB and
+128 KB rail-aligned points, `2416385` for post-edit compile validation, and
+`2416521` for the current full sweep after fixing Apertus CPU affinity. The
+current run pinned local ranks to the four visible 72-core CPU blocks:
+local rank 0 -> CPUs 0-71, local rank 1 -> CPUs 72-143, local rank 2 ->
+CPUs 144-215, and local rank 3 -> CPUs 216-287.
 
 * Cross-rail all-to-all results (Unit: GB/s):
     | Message Size (KB) | 2 Nodes (GH200/CXI) |
     |-------------------|---------------------|
-    | 8                 | 5.12                |
-    | 16                | 5.25                |
-    | 32                | 5.46                |
-    | 64                | 5.57                |
-    | 128               | 5.58                |
-    | 256               | 5.56                |
-    | 512               | 5.63                |
-    | 1024              | 5.65                |
-    | 2048              | 5.68                |
-    | 4096              | 5.64                |
+    | 8                 | 5.64                |
+    | 16                | 5.48                |
+    | 32                | 5.53                |
+    | 64                | 5.53                |
+    | 128               | 5.57                |
+    | 256               | 5.54                |
+    | 512               | 5.59                |
+    | 1024              | 5.60                |
+    | 2048              | 5.58                |
+    | 4096              | 5.61                |
 
 * Rail-aligned all-to-all results (Unit: GB/s):
     | Message Size (KB) | 2 Nodes (GH200/CXI) |
     | ----------------- | ------------------- |
-    | 8                 | 5.38                |
-    | 16                | 4.84                |
-    | 32                | 4.73                |
-    | 64                | 5.08                |
-    | 128               | 5.31                |
-    | 256               | 5.24                |
-    | 512               | 5.51                |
-    | 1024              | 5.65                |
-    | 2048              | 5.51                |
-    | 4096              | 5.37                |
+    | 8                 | 5.45                |
+    | 16                | 4.83                |
+    | 32                | 4.93                |
+    | 64                | 4.32                |
+    | 128               | 4.69                |
+    | 256               | 4.77                |
+    | 512               | 5.52                |
+    | 1024              | 5.73                |
+    | 2048              | 5.54                |
+    | 4096              | 5.64                |
 
 ### To reproduce
 
