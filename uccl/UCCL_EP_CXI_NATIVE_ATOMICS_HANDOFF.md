@@ -537,6 +537,10 @@ Suggested behavior:
 - [x] Add CQ polling and error handling.
 - [x] Request `FI_HMEM` and `FI_FENCE` in CXI `fi_getinfo` hints.
 - [x] Initialize proxy atomic-buffer pointers defensively to `nullptr`.
+- [x] Select CXI domain by local rank (`cxi<local_rank>`) in both the
+  all-to-all benchmark backend and main UCCL-EP `CxiTransport`.
+- [x] Initialize `ProxyCtx::local_rank` / `thread_idx` before CXI transport
+  initialization so the main UCCL-EP path does not try to select `cxi-1`.
 - [x] Ensure cached notify / atomic buffer cleanup ordering is safe enough for
   current validation: CXI `QUIET` drains outstanding completions before acking,
   write+signaling-atomic commands ack on the fenced atomic completion, and the
@@ -569,8 +573,9 @@ Suggested behavior:
 - [x] Re-run fresh two-node low-latency regression: job `2414152` passed on
   `nid006569` / `nid006573`; both ranks printed `All correctness tests passed`.
 - [x] Run fresh README-shape CXI/libfabric high-throughput benchmarks with no
-  proxy tracing: jobs `2414343`, `2414361`, and `2414395` passed for 2, 4, and
-  8 nodes respectively.
+  proxy tracing after fixing CXI domain selection and `ProxyCtx::local_rank`
+  initialization: jobs `2417277`, `2417296`, and `2417350` passed for 2, 4,
+  and 8 nodes respectively.
 - [x] Clean up debug prints / decide final trace knobs before upstreaming:
   decision is to leave the existing library/proxy printfs in place for now.
   They do not affect the measured GPU/network speed path and are useful while
@@ -986,14 +991,30 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
 
   | Nodes | EP | Job | FP8 dispatch | BF16 dispatch | Combine | Notes |
   |:-----:|:--:|:---:|:-------------:|:--------------:|:-------:|:------|
-  | 2 | 8 | `2414343` | 10.42 GB/s, 5794 us | 10.27 GB/s, 11392 us | 10.97 GB/s, 10665 us | `num_topk_groups=2` because only 2 nodes participated |
-  | 4 | 16 | `2414361` | 5.93 GB/s, 18314 us | 5.92 GB/s, 35601 us | 6.19 GB/s, 33996 us | `num_topk_groups=4` |
-  | 8 | 32 | `2414395` | 4.79 GB/s, 25140 us | 4.85 GB/s, 48132 us | 5.07 GB/s, 46135 us | `num_topk_groups=4` |
+  | 2 | 8 | `2417277` | 15.21 GB/s, 3967 us | 15.27 GB/s, 7667 us | 25.99 GB/s, 4501 us | `num_topk_groups=2` because only 2 nodes participated |
+  | 4 | 16 | `2417296` | 17.45 GB/s, 6222 us | 18.26 GB/s, 11536 us | 18.63 GB/s, 11388 us | `num_topk_groups=4` |
+  | 8 | 32 | `2417350` | 15.40 GB/s, 7835 us | 15.80 GB/s, 14787 us | 15.72 GB/s, 14882 us | `num_topk_groups=4` |
+
+  Captured tuning details for the 8-node / EP32 job `2417350`:
+
+  | Phase | SMs | NVL chunk | RDMA chunk | Transmit latency | Notify latency | RDMA bandwidth | NVL bandwidth |
+  |:-----:|:---:|:---------:|:----------:|:----------------:|:--------------:|:--------------:|:-------------:|
+  | FP8 dispatch | 24 | 36 | 32 | 7835 us | 96.47 us | 15.40 GB/s | 26.29 GB/s |
+  | BF16 dispatch | 24 | 24 | 32 | 14787 us | 121.38 us | 15.80 GB/s | 27.09 GB/s |
+  | Combine | 24 | 3 | 32 | 14882 us | 660.41 us | 15.72 GB/s | 26.84 GB/s |
+
+  The complete PTY logs for jobs `2417277` and `2417296` were not saved to
+  files, so their SM/chunk/NVL-bandwidth fields are not retained. The recorded
+  values for those jobs are the bottleneck RDMA bandwidth and transmit latency
+  from the node-local `Best ...` summaries.
 
 - These results have also been added to `ep/README.md` as preliminary
-  Apertus/GH200/Slingshot CXI validation data. Keep the scope clear: these
-  measurements validate the new libfabric/CXI path over the current 4-GPU-node
-  Apertus shape and are not a replacement for the published EFA/InfiniBand
+  Apertus/GH200/Slingshot CXI validation data. They supersede the earlier
+  README-shape jobs `2414343`, `2414361`, and `2414395`, which were run before
+  the CXI domain-local-rank fix was validated in the main UCCL-EP path. Keep
+  the scope clear: these measurements validate the new libfabric/CXI path over
+  the current 4-GPU-node Apertus shape and are not a replacement for the
+  published EFA/InfiniBand
   result tables.
 - FIFO CXI microbenchmark validation: commit `0f5299e4` refactors
   `ep/bench/fifo` behind a shared backend API (`FifoProxy` + `FifoBackend`),
@@ -1109,6 +1130,17 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   `USE_LIBFABRIC_CXI=1`; full extension builds were blocked earlier by the
   active container Python environment missing `nanobind`, before reaching C++
   compilation.
+
+  Main UCCL-EP runtime follow-up: after the domain-selection commit, fresh
+  2-node x 4-rank low-latency smoke job `2417099` exposed the same issue in
+  the real proxy path differently: `Proxy::init_common()` called
+  `CxiTransport::init(ctx_)` before copying `cfg_.local_rank` into
+  `ctx_.local_rank`, so the selector tried to open `cxi-1` and aborted. The
+  fix moves the `ctx_.local_rank` and `ctx_.thread_idx` mirrors to the start
+  of `init_common()`. Fresh job `2417109` built the extension once into a
+  shared job-specific import directory and ran `bench/test_low_latency.py` with
+  2 nodes x 4 ranks; all ranks selected `cxi0`-`cxi3`, all correctness tests
+  passed, and dispatch/combine bandwidth lines were printed for ranks 0-7.
 
 - Previous testing blocker, now intermittent/resolved for the latest attempts:
   some container `srun` attempts were rejected by Slurm before the script
