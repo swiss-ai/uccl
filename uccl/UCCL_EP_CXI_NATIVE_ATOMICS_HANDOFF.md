@@ -1051,23 +1051,25 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   with four ranks per node, one CXI NIC per GPU, and nominal per-NIC bandwidth
   of 25 GB/s (200 Gb/s). `NUM_MSGS=128`, `TOPK=8`, and `WINDOW_SIZE=2048`
   stayed fixed; only payload size and traffic pattern changed. Fresh job
-  `2416234` compiled the benchmark, fresh job `2416238` ran the main sweep,
-  and fresh job `2416369` reran the missing 64 KB and 128 KB rail-aligned
-  points. Fresh job `2416385` passed post-edit compile validation. Results
-  were recorded in `ep/bench/alltoall/efa_alltoall_results.md`:
+  `2416234` compiled the benchmark, fresh job `2416238` ran the first main
+  sweep, and fresh job `2416369` reran the missing 64 KB and 128 KB
+  rail-aligned points. Fresh job `2416385` passed post-edit compile
+  validation. After the NUMA affinity correction below, fresh job `2416521`
+  ran the full cross-rail and rail-aligned sweep again. The current table of
+  record is in `ep/bench/alltoall/efa_alltoall_results.md`:
 
   | Message size | Cross-rail | Rail-aligned |
   | ------------ | ---------- | ------------ |
-  | 8 KB | 5.12 GB/s | 5.38 GB/s |
-  | 16 KB | 5.25 GB/s | 4.84 GB/s |
-  | 32 KB | 5.46 GB/s | 4.73 GB/s |
-  | 64 KB | 5.57 GB/s | 5.08 GB/s |
-  | 128 KB | 5.58 GB/s | 5.31 GB/s |
-  | 256 KB | 5.56 GB/s | 5.24 GB/s |
-  | 512 KB | 5.63 GB/s | 5.51 GB/s |
-  | 1024 KB | 5.65 GB/s | 5.65 GB/s |
-  | 2048 KB | 5.68 GB/s | 5.51 GB/s |
-  | 4096 KB | 5.64 GB/s | 5.37 GB/s |
+  | 8 KB | 5.64 GB/s | 5.45 GB/s |
+  | 16 KB | 5.48 GB/s | 4.83 GB/s |
+  | 32 KB | 5.53 GB/s | 4.93 GB/s |
+  | 64 KB | 5.53 GB/s | 4.32 GB/s |
+  | 128 KB | 5.57 GB/s | 4.69 GB/s |
+  | 256 KB | 5.54 GB/s | 4.77 GB/s |
+  | 512 KB | 5.59 GB/s | 5.52 GB/s |
+  | 1024 KB | 5.60 GB/s | 5.73 GB/s |
+  | 2048 KB | 5.58 GB/s | 5.54 GB/s |
+  | 4096 KB | 5.61 GB/s | 5.64 GB/s |
 
   Backend-API refactor validation: fresh job `2416464` forced a clean rebuild
   with `make clean && make USE_LIBFABRIC_CXI=1 CUDA_HOME=/usr/local/cuda
@@ -1087,6 +1089,8 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   216-287. Fresh job `2416510` forced a clean rebuild and ran the 2-node CXI
   8 KB cross smoke; the printed affinities confirmed those four CPU blocks.
   Rank 0 reported 1516.90 us and 5.53 GB/s.
+  Fresh job `2416521` then reran the complete 2-node all-to-all sweep and
+  printed the same corrected CPU affinities for every tested payload size.
 
 - Previous testing blocker, now intermittent/resolved for the latest attempts:
   some container `srun` attempts were rejected by Slurm before the script
