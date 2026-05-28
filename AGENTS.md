@@ -4,6 +4,10 @@
 
 For Python development, prefer `uv`, `ty`, and `ruff` when they apply.
 
+Do not create git commits unless the user explicitly asks for a commit. It is
+fine to stage, diff, and prepare changes when useful, but committing requires a
+direct user request in the current conversation.
+
 The main paper/reference for UCCL-EP is **"UCCL-EP: Portable
 Expert-Parallel Communication"**, available at
 https://arxiv.org/abs/2512.19849. Read and keep this paper's architecture in

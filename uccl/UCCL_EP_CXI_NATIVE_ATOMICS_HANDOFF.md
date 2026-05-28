@@ -1055,21 +1055,26 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   sweep, and fresh job `2416369` reran the missing 64 KB and 128 KB
   rail-aligned points. Fresh job `2416385` passed post-edit compile
   validation. After the NUMA affinity correction below, fresh job `2416521`
-  ran the full cross-rail and rail-aligned sweep again. The current table of
-  record is in `ep/bench/alltoall/efa_alltoall_results.md`:
+  ran the full cross-rail and rail-aligned sweep again. FI debug then showed
+  the benchmark was still selecting the first `fi_getinfo` result, so all
+  local ranks were using `cxi0`. The fix now chooses `cxi<local_rank>` from
+  the returned `fi_info` list and fails loudly if the expected domain is not
+  available. Fresh job `2416988` reran the full sweep with printed domain
+  selection (`cxi0`, `cxi1`, `cxi2`, `cxi3`) and is the current table of
+  record in `ep/bench/alltoall/efa_alltoall_results.md`:
 
   | Message size | Cross-rail | Rail-aligned |
   | ------------ | ---------- | ------------ |
-  | 8 KB | 5.64 GB/s | 5.45 GB/s |
-  | 16 KB | 5.48 GB/s | 4.83 GB/s |
-  | 32 KB | 5.53 GB/s | 4.93 GB/s |
-  | 64 KB | 5.53 GB/s | 4.32 GB/s |
-  | 128 KB | 5.57 GB/s | 4.69 GB/s |
-  | 256 KB | 5.54 GB/s | 4.77 GB/s |
-  | 512 KB | 5.59 GB/s | 5.52 GB/s |
-  | 1024 KB | 5.60 GB/s | 5.73 GB/s |
-  | 2048 KB | 5.58 GB/s | 5.54 GB/s |
-  | 4096 KB | 5.61 GB/s | 5.64 GB/s |
+  | 8 KB | 19.59 GB/s | 16.05 GB/s |
+  | 16 KB | 19.58 GB/s | 23.00 GB/s |
+  | 32 KB | 20.70 GB/s | 22.91 GB/s |
+  | 64 KB | 21.44 GB/s | 23.26 GB/s |
+  | 128 KB | 21.61 GB/s | 23.08 GB/s |
+  | 256 KB | 22.16 GB/s | 23.10 GB/s |
+  | 512 KB | 22.08 GB/s | 23.30 GB/s |
+  | 1024 KB | 22.05 GB/s | 23.33 GB/s |
+  | 2048 KB | 21.99 GB/s | 23.33 GB/s |
+  | 4096 KB | 21.96 GB/s | 23.33 GB/s |
 
   Backend-API refactor validation: fresh job `2416464` forced a clean rebuild
   with `make clean && make USE_LIBFABRIC_CXI=1 CUDA_HOME=/usr/local/cuda
@@ -1091,6 +1096,19 @@ All runs below used fresh Slurm jobs; no previous allocation or job was reused.
   Rank 0 reported 1516.90 us and 5.53 GB/s.
   Fresh job `2416521` then reran the complete 2-node all-to-all sweep and
   printed the same corrected CPU affinities for every tested payload size.
+
+  CXI domain selection correction: FI debug job `2416774` showed the low
+  all-to-all bandwidth was caused by all local ranks opening `cxi0`; the
+  libfabric provider gave different RGIDs, but under the same physical CXI
+  domain. The all-to-all benchmark and main `CxiTransport` now iterate the
+  `fi_getinfo` result list and select `domain_attr->name == cxi<local_rank>`.
+  Fresh job `2416945` validated the fix on 8 KB and 4096 KB cross-rail cases:
+  rank 0 reported 20.90 GB/s and 22.11 GB/s respectively, with domain prints
+  confirming local ranks 0-3 selected `cxi0`-`cxi3`. Fresh job `2416985`
+  compiled `ep/src/cxi_transport.cpp` as a standalone translation unit with
+  `USE_LIBFABRIC_CXI=1`; full extension builds were blocked earlier by the
+  active container Python environment missing `nanobind`, before reaching C++
+  compilation.
 
 - Previous testing blocker, now intermittent/resolved for the latest attempts:
   some container `srun` attempts were rejected by Slurm before the script
