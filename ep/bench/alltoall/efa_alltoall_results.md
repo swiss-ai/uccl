@@ -88,38 +88,40 @@ torchrun --nnodes=2 --nproc_per_node=4 ... \
 Fresh Slurm jobs: `2416234` for initial compile validation, `2416238` for the
 first two-node sweep, `2416369` for a fresh rerun of the missing 64 KB and
 128 KB rail-aligned points, `2416385` for post-edit compile validation, and
-`2416521` for the current full sweep after fixing Apertus CPU affinity. The
-current run pinned local ranks to the four visible 72-core CPU blocks:
+`2416521` for the full sweep after fixing Apertus CPU affinity. Job `2416988`
+is the current full sweep after fixing CXI domain selection so local rank 0
+uses `cxi0`, rank 1 uses `cxi1`, rank 2 uses `cxi2`, and rank 3 uses `cxi3`.
+The run also pinned local ranks to the four visible 72-core CPU blocks:
 local rank 0 -> CPUs 0-71, local rank 1 -> CPUs 72-143, local rank 2 ->
 CPUs 144-215, and local rank 3 -> CPUs 216-287.
 
 * Cross-rail all-to-all results (Unit: GB/s):
     | Message Size (KB) | 2 Nodes (GH200/CXI) |
     |-------------------|---------------------|
-    | 8                 | 5.64                |
-    | 16                | 5.48                |
-    | 32                | 5.53                |
-    | 64                | 5.53                |
-    | 128               | 5.57                |
-    | 256               | 5.54                |
-    | 512               | 5.59                |
-    | 1024              | 5.60                |
-    | 2048              | 5.58                |
-    | 4096              | 5.61                |
+    | 8                 | 19.59               |
+    | 16                | 19.58               |
+    | 32                | 20.70               |
+    | 64                | 21.44               |
+    | 128               | 21.61               |
+    | 256               | 22.16               |
+    | 512               | 22.08               |
+    | 1024              | 22.05               |
+    | 2048              | 21.99               |
+    | 4096              | 21.96               |
 
 * Rail-aligned all-to-all results (Unit: GB/s):
     | Message Size (KB) | 2 Nodes (GH200/CXI) |
     | ----------------- | ------------------- |
-    | 8                 | 5.45                |
-    | 16                | 4.83                |
-    | 32                | 4.93                |
-    | 64                | 4.32                |
-    | 128               | 4.69                |
-    | 256               | 4.77                |
-    | 512               | 5.52                |
-    | 1024              | 5.73                |
-    | 2048              | 5.54                |
-    | 4096              | 5.64                |
+    | 8                 | 16.05               |
+    | 16                | 23.00               |
+    | 32                | 22.91               |
+    | 64                | 23.26               |
+    | 128               | 23.08               |
+    | 256               | 23.10               |
+    | 512               | 23.30               |
+    | 1024              | 23.33               |
+    | 2048              | 23.33               |
+    | 4096              | 23.33               |
 
 ### To reproduce
 

@@ -87,6 +87,33 @@ void check_fi(int rc, char const* what) {
   }
 }
 
+fi_info* select_cxi_info(fi_info* infos, int local_rank) {
+  char target[32];
+  snprintf(target, sizeof(target), "cxi%d", local_rank);
+
+  for (fi_info* cur = infos; cur; cur = cur->next) {
+    char const* name =
+        (cur->domain_attr && cur->domain_attr->name) ? cur->domain_attr->name
+                                                     : "";
+    if (strcmp(name, target) == 0) {
+      printf("Selected CXI domain %s for local_rank %d\n", name, local_rank);
+      return cur;
+    }
+  }
+
+  fprintf(stderr, "Could not find required CXI domain %s for local_rank %d\n",
+          target, local_rank);
+  fprintf(stderr, "Available CXI domains:");
+  for (fi_info* cur = infos; cur; cur = cur->next) {
+    char const* name =
+        (cur->domain_attr && cur->domain_attr->name) ? cur->domain_attr->name
+                                                     : "<unknown>";
+    fprintf(stderr, " %s", name);
+  }
+  fprintf(stderr, "\n");
+  exit(1);
+}
+
 struct CxiContext {
   fid_fabric* fabric = nullptr;
   fid_domain* domain = nullptr;
@@ -147,8 +174,11 @@ void cxi_init(CxiContext& cxi, int local_rank) {
   fi_freeinfo(hints);
   check_fi(rc, "fi_getinfo(cxi)");
 
-  check_fi(fi_fabric(info->fabric_attr, &cxi.fabric, nullptr), "fi_fabric");
-  check_fi(fi_domain(cxi.fabric, info, &cxi.domain, nullptr), "fi_domain");
+  fi_info* selected = select_cxi_info(info, local_rank);
+
+  check_fi(fi_fabric(selected->fabric_attr, &cxi.fabric, nullptr),
+           "fi_fabric");
+  check_fi(fi_domain(cxi.fabric, selected, &cxi.domain, nullptr), "fi_domain");
   fi_cq_attr cq_attr = {};
   cq_attr.format = FI_CQ_FORMAT_CONTEXT;
   cq_attr.size = 131072;
@@ -156,7 +186,7 @@ void cxi_init(CxiContext& cxi, int local_rank) {
   fi_av_attr av_attr = {};
   av_attr.type = FI_AV_MAP;
   check_fi(fi_av_open(cxi.domain, &av_attr, &cxi.av, nullptr), "fi_av_open");
-  check_fi(fi_endpoint(cxi.domain, info, &cxi.ep, nullptr), "fi_endpoint");
+  check_fi(fi_endpoint(cxi.domain, selected, &cxi.ep, nullptr), "fi_endpoint");
   check_fi(fi_ep_bind(cxi.ep, &cxi.cq->fid, FI_TRANSMIT | FI_RECV),
            "fi_ep_bind(cq)");
   check_fi(fi_ep_bind(cxi.ep, &cxi.av->fid, 0), "fi_ep_bind(av)");
