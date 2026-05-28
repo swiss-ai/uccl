@@ -368,6 +368,22 @@ void pin_to_numa(int local_rank) {
             numa_node);
   }
 
+  cpu_set_t actual_cpu_mask;
+  CPU_ZERO(&actual_cpu_mask);
+  if (sched_getaffinity(0, sizeof(actual_cpu_mask), &actual_cpu_mask) == 0) {
+    printf("Rank local_rank %d NUMA node %d CPU affinity:", local_rank,
+           numa_node);
+    for (unsigned int i = 0; i < max_cpus; i++) {
+      if (CPU_ISSET(i, &actual_cpu_mask)) {
+        printf(" %u", i);
+      }
+    }
+    printf("\n");
+  } else {
+    fprintf(stderr, "Warning: Failed to read CPU affinity for local_rank %d\n",
+            local_rank);
+  }
+
   numa_free_cpumask(cpu_bitmask);
 
   printf("Rank pinned to NUMA node %d (local_rank %d)\n", numa_node,
