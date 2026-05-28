@@ -1,0 +1,1647 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UCCL EP CXI High-Throughput Explainer</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #5a6675;
+      --line: #cfd6df;
+      --soft: #e9edf2;
+      --green: #1f8a5b;
+      --green-soft: #dff3ea;
+      --blue: #2268a8;
+      --blue-soft: #deebf7;
+      --red: #b43b3b;
+      --red-soft: #f6dddd;
+      --amber: #a76b12;
+      --amber-soft: #f6ead3;
+      --violet: #6849a8;
+      --violet-soft: #e8e1f7;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: var(--sans);
+      line-height: 1.45;
+    }
+
+    header {
+      min-height: 56vh;
+      display: grid;
+      align-items: end;
+      padding: 40px clamp(18px, 4vw, 64px);
+      color: white;
+      background:
+        linear-gradient(rgba(13, 25, 38, 0.22), rgba(13, 25, 38, 0.68)),
+        linear-gradient(135deg, #1b4b6d 0%, #2f7d62 48%, #7b5a25 100%);
+      position: relative;
+      overflow: hidden;
+    }
+
+    header::after {
+      content: "";
+      position: absolute;
+      inset: auto -10% -40% -10%;
+      height: 60%;
+      background:
+        repeating-linear-gradient(90deg, rgba(255,255,255,0.12) 0 1px, transparent 1px 80px),
+        repeating-linear-gradient(0deg, rgba(255,255,255,0.10) 0 1px, transparent 1px 48px);
+      transform: perspective(500px) rotateX(58deg);
+      transform-origin: bottom;
+    }
+
+    .hero {
+      max-width: 1120px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .kicker {
+      font-family: var(--mono);
+      font-size: 13px;
+      letter-spacing: 0;
+      opacity: 0.9;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      font-size: clamp(34px, 5vw, 64px);
+      line-height: 1.04;
+      margin: 0 0 14px;
+      letter-spacing: 0;
+      max-width: 980px;
+    }
+
+    .hero p {
+      max-width: 820px;
+      font-size: clamp(17px, 2vw, 22px);
+      margin: 0 0 28px;
+      color: rgba(255,255,255,0.9);
+    }
+
+    .hero-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 2px;
+    }
+
+    .hero-links a, button, .chip {
+      border: 1px solid rgba(255,255,255,0.45);
+      background: rgba(255,255,255,0.14);
+      color: inherit;
+      text-decoration: none;
+      padding: 9px 12px;
+      border-radius: 6px;
+      font: 600 14px var(--sans);
+      cursor: pointer;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+      gap: 28px;
+      max-width: 1420px;
+      margin: 0 auto;
+      padding: 24px clamp(16px, 3vw, 40px) 80px;
+    }
+
+    nav {
+      position: sticky;
+      top: 16px;
+      align-self: start;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+    }
+
+    nav h2 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      color: var(--muted);
+      margin: 2px 0 10px;
+    }
+
+    nav a {
+      display: block;
+      color: var(--ink);
+      text-decoration: none;
+      padding: 8px 9px;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+
+    nav a:hover { background: var(--soft); }
+
+    .content {
+      display: grid;
+      gap: 24px;
+      min-width: 0;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: clamp(18px, 3vw, 30px);
+    }
+
+    h2 {
+      font-size: clamp(24px, 3vw, 36px);
+      line-height: 1.15;
+      margin: 0 0 12px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      font-size: 18px;
+      margin: 0 0 10px;
+      letter-spacing: 0;
+    }
+
+    p { margin: 0 0 12px; color: var(--muted); }
+    code, pre { font-family: var(--mono); }
+    code {
+      background: #eef1f4;
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: #243241;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfd;
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .card strong { display: block; margin-bottom: 6px; }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0 0;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 18px 0;
+      padding: 12px;
+      background: #f2f5f8;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .toolbar button {
+      color: var(--ink);
+      border-color: var(--line);
+      background: var(--panel);
+    }
+
+    .toolbar button.active {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    .diagram {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fcfdfe;
+      padding: 14px;
+      overflow: auto;
+    }
+
+    .nodes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(280px, 1fr));
+      gap: 16px;
+      min-width: 640px;
+    }
+
+    .node {
+      border: 2px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: linear-gradient(#fff, #f7f9fb);
+    }
+
+    .node-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font: 700 13px var(--mono);
+      margin-bottom: 10px;
+    }
+
+    .rank-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(60px, 1fr));
+      gap: 8px;
+    }
+
+    .rank {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px 7px;
+      background: white;
+      text-align: center;
+      min-height: 62px;
+      display: grid;
+      align-content: center;
+      gap: 3px;
+      position: relative;
+    }
+
+    .rank .id {
+      font: 800 18px var(--mono);
+      color: var(--ink);
+    }
+
+    .rank .nvl {
+      font: 12px var(--mono);
+      color: var(--muted);
+    }
+
+    .rank.linked {
+      border-color: var(--green);
+      box-shadow: inset 0 0 0 2px var(--green-soft);
+    }
+
+    .rank.warn {
+      border-color: var(--amber);
+      box-shadow: inset 0 0 0 2px var(--amber-soft);
+    }
+
+    .connector {
+      margin: 14px auto 2px;
+      height: 54px;
+      min-width: 640px;
+      position: relative;
+    }
+
+    .connector .line {
+      position: absolute;
+      height: 2px;
+      background: var(--green);
+      transform-origin: left center;
+      opacity: 0.75;
+    }
+
+    .rank-svg {
+      min-width: 860px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .rank-svg .node-shell {
+      fill: #fbfcfd;
+      stroke: var(--line);
+      stroke-width: 1.5;
+      rx: 8;
+    }
+
+    .rank-svg .rank-box {
+      fill: #fff;
+      stroke: var(--green);
+      stroke-width: 1.4;
+      rx: 6;
+    }
+
+    .rank-svg .rank-box.warn {
+      stroke: var(--amber);
+      fill: var(--amber-soft);
+    }
+
+    .rank-svg .rank-link {
+      stroke: #91a3b5;
+      stroke-width: 2.2;
+      fill: none;
+      opacity: 0.7;
+      transition: stroke 140ms ease, stroke-width 140ms ease, opacity 140ms ease;
+    }
+
+    .rank-svg .rank-link.hot {
+      stroke: var(--green);
+      stroke-width: 4;
+      opacity: 1;
+    }
+
+    .pair-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .pair-chip {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 6px;
+      padding: 7px 9px;
+      font: 700 12px var(--mono);
+      color: var(--muted);
+    }
+
+    .pair-chip.hot {
+      border-color: var(--green);
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 10px;
+    }
+
+    .swatch {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      border: 1px solid var(--line);
+      vertical-align: -2px;
+      margin-right: 5px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(150px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      min-width: 860px;
+    }
+
+    .flow-step {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: white;
+      min-height: 130px;
+      transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .flow-step.active {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px var(--blue-soft);
+      transform: translateY(-2px);
+    }
+
+    .flow-step .num {
+      font: 800 20px var(--mono);
+      color: var(--blue);
+    }
+
+    .flow-step p { font-size: 13px; margin: 4px 0 0; }
+
+    .fifo {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 12px;
+      align-items: center;
+      margin-top: 12px;
+    }
+
+    .fifo-label {
+      font: 700 13px var(--mono);
+      color: var(--muted);
+    }
+
+    .slots {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(70px, 1fr));
+      gap: 8px;
+      min-width: 640px;
+    }
+
+    .slot {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      min-height: 58px;
+      display: grid;
+      place-items: center;
+      background: white;
+      font: 700 12px var(--mono);
+      color: var(--muted);
+      text-align: center;
+      padding: 6px;
+    }
+
+    .slot.write { background: var(--blue-soft); color: var(--blue); border-color: #9abbd8; }
+    .slot.write-atomic { background: var(--green-soft); color: var(--green); border-color: #9bcfb8; }
+    .slot.atomic { background: var(--green-soft); color: var(--green); border-color: #9bcfb8; }
+    .slot.quiet { background: var(--amber-soft); color: var(--amber); border-color: #d6b77a; }
+    .slot.barrier { background: var(--violet-soft); color: var(--violet); border-color: #b8a8df; }
+    .slot.done { opacity: 0.4; text-decoration: line-through; }
+
+    .state-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+
+    .state-table th, .state-table td {
+      border: 1px solid var(--line);
+      padding: 8px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    .state-table th {
+      background: #f1f4f7;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .file-map {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .file-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 12px;
+    }
+
+    .file-card .path {
+      display: block;
+      font: 700 12px var(--mono);
+      color: var(--blue);
+      margin-bottom: 7px;
+      overflow-wrap: anywhere;
+    }
+
+    .mini-flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(130px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+      min-width: 780px;
+    }
+
+    .mini-flow .step {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      padding: 10px;
+      min-height: 112px;
+    }
+
+    .mini-flow .step strong {
+      display: block;
+      font: 800 13px var(--mono);
+      margin-bottom: 6px;
+      color: var(--ink);
+    }
+
+    .buffer-lanes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .lane {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .lane h3 {
+      padding: 10px 12px;
+      background: #f1f4f7;
+      border-bottom: 1px solid var(--line);
+      margin: 0;
+    }
+
+    .lane .segment {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--soft);
+      font-size: 13px;
+    }
+
+    .lane .segment:last-child { border-bottom: 0; }
+
+    .lane .segment code {
+      align-self: start;
+      background: transparent;
+      padding: 0;
+      color: var(--ink);
+      overflow-wrap: anywhere;
+    }
+
+    .snippet-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .snippet-grid pre {
+      margin-top: 8px;
+      max-height: 360px;
+    }
+
+    .source-note {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 0;
+    }
+
+    .svg-wrap {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      overflow: auto;
+    }
+
+    svg { display: block; min-width: 860px; width: 100%; height: auto; }
+    .svg-label { font: 700 13px var(--sans); fill: var(--ink); }
+    .svg-small { font: 12px var(--mono); fill: var(--muted); }
+    .svg-box { fill: #fbfcfd; stroke: var(--line); stroke-width: 1.5; rx: 7; }
+    .svg-blue { fill: var(--blue-soft); stroke: var(--blue); }
+    .svg-green { fill: var(--green-soft); stroke: var(--green); }
+    .svg-amber { fill: var(--amber-soft); stroke: var(--amber); }
+    .svg-violet { fill: var(--violet-soft); stroke: var(--violet); }
+    .svg-red { fill: var(--red-soft); stroke: var(--red); }
+    .arrow { stroke: #4c5b69; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+
+    .callout {
+      border-left: 5px solid var(--blue);
+      background: var(--blue-soft);
+      padding: 12px 14px;
+      border-radius: 0 var(--radius) var(--radius) 0;
+      color: #153b5e;
+    }
+
+    .callout.warn {
+      border-left-color: var(--amber);
+      background: var(--amber-soft);
+      color: #5f3b05;
+    }
+
+    .callout.danger {
+      border-left-color: var(--red);
+      background: var(--red-soft);
+      color: #742424;
+    }
+
+    .checklist {
+      list-style: none;
+      padding: 0;
+      margin: 12px 0 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .checklist li {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px 10px;
+      background: #fff;
+    }
+
+    .checklist code { white-space: nowrap; }
+
+    pre {
+      margin: 12px 0 0;
+      padding: 14px;
+      overflow: auto;
+      background: #17202a;
+      color: #e8eef5;
+      border-radius: var(--radius);
+      font-size: 13px;
+    }
+
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      padding: 20px;
+      font-size: 13px;
+    }
+
+    @media (max-width: 960px) {
+      main { grid-template-columns: 1fr; }
+      nav { position: static; }
+      .cols-2, .cols-3, .cols-4 { grid-template-columns: 1fr; }
+      .snippet-grid, .buffer-lanes { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; min-width: 0; }
+      .mini-flow { grid-template-columns: 1fr; min-width: 0; }
+      .nodes, .connector, .slots { min-width: 0; }
+      .nodes { grid-template-columns: 1fr; }
+      .rank-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .fifo { grid-template-columns: 1fr; }
+      .slots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      svg { min-width: 720px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="hero">
+      <div class="kicker">UCCL EP / CXI / high-throughput internode path</div>
+      <h1>How the HT layout, GPU FIFO, CPU proxy, and CXI transport fit together</h1>
+      <p>
+        A visual debugging guide for the UCCL expert-parallel high-throughput path on
+        CXI systems. It explains the data layout, command flow, completion semantics,
+        and the 8-local-rank assumptions that caused misleading failures on 4-GPU nodes.
+      </p>
+      <div class="hero-links">
+        <a href="#paper">Paper</a>
+        <a href="#layout">Layout</a>
+        <a href="#file-map">Files</a>
+        <a href="#ll-path">LL Path</a>
+        <a href="#buffers">Buffers</a>
+        <a href="#fifo">FIFO</a>
+        <a href="#proxy">Proxy</a>
+        <a href="#barrier">Barrier</a>
+        <a href="#validation">Results</a>
+        <a href="#debugging">Debugging</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <nav aria-label="Page sections">
+      <h2>Sections</h2>
+      <a href="#paper">Paper Anchor</a>
+      <a href="#mental-model">Mental Model</a>
+      <a href="#file-map">Code File Map</a>
+      <a href="#layout">HT Rank Layout</a>
+      <a href="#ll-path">Low-Latency Path</a>
+      <a href="#buffers">Buffer Lifecycle</a>
+      <a href="#fifo">GPU FIFO</a>
+      <a href="#proxy">CPU Proxy Methodology</a>
+      <a href="#completion">WR Completion</a>
+      <a href="#barrier">CXI Barrier</a>
+      <a href="#eight-rank">8-Rank Assumptions</a>
+      <a href="#validation">Validation Results</a>
+      <a href="#debugging">Debugging Ladder</a>
+      <a href="#snippets">Code Snippets</a>
+      <a href="#commands">Commands</a>
+    </nav>
+
+    <div class="content">
+      <section id="paper">
+        <h2>Paper Anchor</h2>
+        <p>
+          The main architecture reference for this codebase is
+          <a href="https://arxiv.org/abs/2512.19849">arXiv:2512.19849,
+          "UCCL-EP: Portable Expert-Parallel Communication"</a>. The paper's
+          central design is the thread that ties this page together: GPU kernels
+          do token-routing work and enqueue compact communication commands, while
+          CPU proxy threads issue the actual network operations and preserve the
+          ordering/completion semantics expected by EP kernels.
+        </p>
+        <div class="grid cols-3">
+          <div class="card">
+            <strong>Paper idea</strong>
+            <p>Move the hardware-specific network interface work out of GPU kernels and into CPU proxies.</p>
+          </div>
+          <div class="card">
+            <strong>Code consequence</strong>
+            <p>When debugging, travel from kernel command generation to D2H FIFO packing, proxy dequeue/post, transport completion, and FIFO ack.</p>
+          </div>
+          <div class="card">
+            <strong>CXI extension</strong>
+            <p>This branch keeps the paper's proxy architecture but swaps verbs-specific operations for libfabric/CXI writes, atomics, MRs, and CQs.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="mental-model">
+        <h2>Mental Model</h2>
+        <p>
+          UCCL EP uses GPU kernels to decide what should move, but CPU proxy threads
+          perform the network operations. The GPU writes compact commands into per-proxy
+          FIFO queues. The CPU proxy drains those commands, posts CXI writes and atomics,
+          polls completions, and only then acknowledges the FIFO slot back to the GPU.
+        </p>
+        <div class="grid cols-4">
+          <div class="card">
+            <strong>GPU kernel</strong>
+            <p>Computes routing and enqueues compact commands: WRITE, ATOMIC, QUIET, BARRIER.</p>
+          </div>
+          <div class="card">
+            <strong>D2H FIFO</strong>
+            <p>Host-visible queue used as the command handoff between GPU and CPU proxy.</p>
+          </div>
+          <div class="card">
+            <strong>CPU proxy</strong>
+            <p>Converts commands into transport operations and manages ordering/completions.</p>
+          </div>
+          <div class="card">
+            <strong>CXI/libfabric</strong>
+            <p>Executes endpoint-bound RMA writes and native atomics against remote MR offsets.</p>
+          </div>
+        </div>
+        <div class="pill-row">
+          <span class="pill">Transport forced with <code>UCCL_EP_TRANSPORT=cxi</code></span>
+          <span class="pill">Provider forced with <code>FI_PROVIDER=cxi</code></span>
+          <span class="pill">Current Apertus shape uses <code>NUM_MAX_NVL_PEERS=4</code></span>
+        </div>
+      </section>
+
+      <section id="file-map">
+        <h2>Code File Map</h2>
+        <p>
+          The EP path is split across Python setup, C++ runtime/proxy ownership,
+          CUDA kernels, D2H queue packing, and transport implementations. When a
+          failure looks like CXI, first identify which layer last had a valid
+          invariant.
+        </p>
+        <div class="file-map">
+          <div class="file-card">
+            <span class="path">ep/bench/buffer.py</span>
+            <p>Python-facing Buffer object. Allocates or receives RDMA scratch, wires proxy atomic buffers into the runtime, and exposes dispatch/combine entry points.</p>
+          </div>
+          <div class="file-card">
+            <span class="path">ep/src/uccl_ep.cc</span>
+            <p>Nanobind runtime. Stores <code>rdma_buffer_ptr</code> and <code>atomic_buffer_ptr</code>, launches HT and LL kernels, and exposes buffer/proxy hooks.</p>
+          </div>
+          <div class="file-card">
+            <span class="path">ep/src/internode.cu</span>
+            <p>High-throughput internode dispatch/combine kernels. This is where <code>NUM_MAX_NVL_PEERS</code>, RDMA/NVL rank layout, metadata matrices, and packed routing live.</p>
+          </div>
+          <div class="file-card">
+            <span class="path">ep/src/internode_ll.cu</span>
+            <p>Low-latency internode kernels. Uses the same proxy/FIFO/transport idea with different packet shape, LL metadata, and tighter command packing.</p>
+          </div>
+          <div class="file-card">
+            <span class="path">ep/include/ring_buffer.cuh</span>
+            <p>Defines <code>TransferCmd</code>, command type bits, LL expert/token packing, and write-offset decoding rules.</p>
+          </div>
+          <div class="file-card">
+            <span class="path">ep/include/d2h_queue_device.cuh</span>
+            <p>GPU-side command packer for the D2H queue. Important because the host proxy decodes exactly this 128-bit command shape.</p>
+          </div>
+          <div class="file-card">
+            <span class="path">ep/src/proxy.cpp</span>
+            <p>CPU proxy loop. Dequeues GPU commands, posts verbs or CXI operations, polls completions, and acks FIFO slots only when their visible effect is complete.</p>
+          </div>
+          <div class="file-card">
+            <span class="path">ep/src/cxi_transport.cpp</span>
+            <p>libfabric/CXI transport. Owns provider/domain/endpoint/CQ/AV setup, endpoint-bound MRs, offset-based RMA writes, atomics, and CQ polling.</p>
+          </div>
+          <div class="file-card">
+            <span class="path">ep/include/ep_config.hpp</span>
+            <p>Buffer sizing and layout hints for normal HT and low-latency modes. Audit this when rank count or buffer shape changes.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="layout">
+        <h2>High-Throughput Rank Layout</h2>
+        <p>
+          High-throughput internode mode groups ranks by local NVL peer index. A rank
+          communicates with the same local GPU index on remote nodes. On 4-GPU Apertus
+          nodes, rank 0 pairs with rank 4, rank 1 with rank 5, and so on.
+        </p>
+
+        <div class="toolbar" role="group" aria-label="Rank shape controls">
+          <span class="chip" style="color: var(--ink); background: #fff;">Local peers</span>
+          <button id="shape4" class="active" type="button">4 per node</button>
+          <button id="shape8" type="button">8 per node</button>
+          <button id="animateLinks" type="button">Animate links</button>
+        </div>
+
+        <div class="diagram">
+          <div id="rankDiagram" aria-live="polite"></div>
+          <div id="rankPairList" class="pair-list" aria-live="polite"></div>
+          <div class="legend">
+            <span><span class="swatch" style="background: var(--green-soft); border-color: var(--green);"></span>same local index internode peer</span>
+            <span><span class="swatch" style="background: var(--amber-soft); border-color: var(--amber);"></span>shape-sensitive local peer count</span>
+          </div>
+        </div>
+
+        <div class="callout warn" style="margin-top: 14px;">
+          The original HT path had several places where "local peers" effectively meant
+          eight. That matches the original DeepSeek/DeepEP server shape, but it is not
+          known to be an algorithmic speed requirement. Treat hidden 8-peer coupling as
+          a portability bug until proven otherwise.
+        </div>
+      </section>
+
+      <section id="ll-path">
+        <h2>Low-Latency Path</h2>
+        <p>
+          LL is not a separate transport stack. It uses different kernels and a
+          different buffer layout, but it still relies on the same GPU-to-proxy
+          command handoff and the same CXI transport backend. That makes LL a useful
+          first validation target before HT tuning.
+        </p>
+        <div class="diagram">
+          <div class="mini-flow">
+            <div class="step">
+              <strong>1. Python setup</strong>
+              <p><code>ep/bench/buffer.py</code> creates the Buffer and connects proxy atomic memory.</p>
+            </div>
+            <div class="step">
+              <strong>2. Runtime launch</strong>
+              <p><code>ep/src/uccl_ep.cc</code> calls <code>internode_ll::dispatch</code> or <code>combine</code>.</p>
+            </div>
+            <div class="step">
+              <strong>3. LL kernel</strong>
+              <p><code>ep/src/internode_ll.cu</code> writes compact <code>TransferCmd</code> entries.</p>
+            </div>
+            <div class="step">
+              <strong>4. Proxy post</strong>
+              <p><code>ep/src/proxy.cpp</code> decodes LL commands and posts CXI writes/atomics.</p>
+            </div>
+            <div class="step">
+              <strong>5. Counter visible</strong>
+              <p>Remote counters in <code>atomic_buffer_ptr</code> signal that the peer can consume data.</p>
+            </div>
+          </div>
+        </div>
+        <table class="state-table">
+          <thead>
+            <tr><th>Question</th><th>HT normal mode</th><th>LL mode</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Kernel files</td>
+              <td><code>ep/src/internode.cu</code>, <code>ep/include/internode.cuh</code></td>
+              <td><code>ep/src/internode_ll.cu</code>, <code>ep/include/internode_ll.cuh</code></td>
+            </tr>
+            <tr>
+              <td>Command bit</td>
+              <td><code>get_low_latency(cmd_type) == false</code></td>
+              <td><code>make_cmd_type(..., low_latency=true)</code> sets bit 7</td>
+            </tr>
+            <tr>
+              <td>WRITE offsets</td>
+              <td>Normal mode shifts by 2 for 4-byte alignment.</td>
+              <td>LL shifts by 4 for 16-byte alignment.</td>
+            </tr>
+            <tr>
+              <td>Extra packing</td>
+              <td><code>atomic_offset</code> identifies counter slots.</td>
+              <td><code>expert_idx</code> packs expert id plus high token-count bits.</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="callout" style="margin-top: 14px;">
+          Debugging rule: if LL fails, suspect transport/proxy/bootstrap/buffer
+          registration first. If LL passes and HT fails, suspect HT rank layout,
+          metadata packing, channel math, or hidden local-peer-count assumptions.
+        </div>
+      </section>
+
+      <section id="buffers">
+        <h2>Buffer Lifecycle</h2>
+        <p>
+          The code uses two logically different internode memory regions: the main
+          RDMA payload/scratch buffer and the atomic/signaling buffer. CXI must register
+          both memory regions with endpoint-bound MRs and all remote addressing must be
+          expressed as offsets from the registered base.
+        </p>
+        <div class="buffer-lanes">
+          <div class="lane">
+            <h3>Main RDMA Buffer</h3>
+            <div class="segment"><code>buffer.py</code><span>Allocates or obtains scratch through <code>ep.get_rdma_buffer</code>, then calls runtime <code>set_rdma_buffer</code>.</span></div>
+            <div class="segment"><code>uccl_ep.cc</code><span>Stores <code>rdma_buffer_ptr</code>, resets it, exposes IPC handles, and passes it to HT/LL kernels.</span></div>
+            <div class="segment"><code>internode*.cu</code><span>Computes source and destination offsets relative to the base pointer, not absolute remote pointers.</span></div>
+            <div class="segment"><code>cxi_transport.cpp</code><span>Registers HMEM or host memory and sends <code>fi_write</code> to remote MR offsets.</span></div>
+          </div>
+          <div class="lane">
+            <h3>Atomic / Signaling Buffer</h3>
+            <div class="segment"><code>uccl_proxy.cpp</code><span>Allocates one shared atomic buffer per proxy group and defensively initializes proxy pointers.</span></div>
+            <div class="segment"><code>buffer.py</code><span>Calls <code>connect_atomic_buffer</code> so the runtime and all proxies share the same signaling memory.</span></div>
+            <div class="segment"><code>ep_config.hpp</code><span>Places LL signaling buffers in <code>atomic_buffer_ptr</code> and guards against overflowing <code>kAtomicBufferSize</code>.</span></div>
+            <div class="segment"><code>proxy.cpp</code><span>Posts native CXI atomics for counters and barriers, then maps completions back to FIFO slots.</span></div>
+          </div>
+        </div>
+        <div class="callout warn" style="margin-top: 14px;">
+          Cleanup/order risk: a cached notify or atomic buffer pointer must not outlive
+          the allocation it points at. When debugging shutdown crashes, inspect proxy
+          ownership, <code>set_atomic_buffer_ptr</code>, and any cached notification state
+          before changing CXI completion logic.
+        </div>
+      </section>
+
+      <section id="fifo">
+        <h2>GPU FIFO Command Flow</h2>
+        <p>
+          The GPU pushes commands into FIFO slots. The proxy must not pop a WRITE slot
+          until the operation that makes the command semantically complete has completed.
+          For normal-mode write+counter commands, that means the fenced signaling atomic,
+          not merely the payload write.
+        </p>
+
+        <div class="toolbar">
+          <button id="prevFlow" type="button">Previous</button>
+          <button id="nextFlow" type="button">Next</button>
+          <button id="playFlow" type="button">Play</button>
+          <span id="flowCaption" class="chip" style="color: var(--ink); background: #fff;"></span>
+        </div>
+
+        <div class="diagram">
+          <div id="flowSteps" class="flow"></div>
+          <div class="fifo">
+            <div class="fifo-label">GPU FIFO</div>
+            <div id="fifoSlots" class="slots"></div>
+          </div>
+          <div class="fifo">
+            <div class="fifo-label">Proxy state</div>
+            <div id="proxySlots" class="slots"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="proxy">
+        <h2>CPU Proxy Methodology</h2>
+        <p>
+          The proxy loop is deliberately simple: progress transport completions, notify
+          GPU-visible FIFO state, dequeue new GPU commands, then do normal-mode barrier
+          checks. The hard part is preserving the same completion meaning across verbs
+          and CXI.
+        </p>
+
+        <div class="svg-wrap">
+          <svg viewBox="0 0 980 420" role="img" aria-label="Proxy loop diagram">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5"
+                      markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#4c5b69"></path>
+              </marker>
+            </defs>
+            <rect class="svg-box svg-blue" x="40" y="55" width="190" height="76"></rect>
+            <text class="svg-label" x="64" y="86">poll completions</text>
+            <text class="svg-small" x="64" y="110">CXI CQ -> acked_wrs_</text>
+
+            <rect class="svg-box svg-green" x="285" y="55" width="190" height="76"></rect>
+            <text class="svg-label" x="309" y="86">notify GPU</text>
+            <text class="svg-small" x="309" y="110">pop completed FIFO slots</text>
+
+            <rect class="svg-box svg-amber" x="530" y="55" width="190" height="76"></rect>
+            <text class="svg-label" x="554" y="86">post commands</text>
+            <text class="svg-small" x="554" y="110">WRITE / ATOMIC / QUIET</text>
+
+            <rect class="svg-box svg-violet" x="775" y="55" width="165" height="76"></rect>
+            <text class="svg-label" x="799" y="86">barrier check</text>
+            <text class="svg-small" x="799" y="110">normal mode only</text>
+
+            <path class="arrow" d="M230 93 H285"></path>
+            <path class="arrow" d="M475 93 H530"></path>
+            <path class="arrow" d="M720 93 H775"></path>
+            <path class="arrow" d="M858 131 C858 220 120 220 120 132"></path>
+
+            <rect class="svg-box" x="85" y="285" width="250" height="76"></rect>
+            <text class="svg-label" x="109" y="316">GPU FIFO pending</text>
+            <text class="svg-small" x="109" y="340">wr_id -> slot -> bytes</text>
+
+            <rect class="svg-box" x="395" y="285" width="250" height="76"></rect>
+            <text class="svg-label" x="419" y="316">transport outstanding</text>
+            <text class="svg-small" x="419" y="340">cxi_outstanding_ops_</text>
+
+            <rect class="svg-box" x="705" y="285" width="190" height="76"></rect>
+            <text class="svg-label" x="729" y="316">CQ result</text>
+            <text class="svg-small" x="729" y="340">wr_id completion</text>
+
+            <path class="arrow" d="M625 131 C625 200 520 220 520 285"></path>
+            <path class="arrow" d="M645 323 H705"></path>
+            <path class="arrow" d="M705 323 C570 250 335 250 260 285"></path>
+          </svg>
+        </div>
+
+        <table class="state-table">
+          <thead>
+            <tr><th>State</th><th>Meaning</th><th>Bug if wrong</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>fifo_pending_</code></td>
+              <td>FIFO slots accepted from GPU but not yet semantically complete.</td>
+              <td>GPU waits forever if a completed WR never pops the slot.</td>
+            </tr>
+            <tr>
+              <td><code>acked_wrs_</code></td>
+              <td>WR ids whose transport-side completion now permits FIFO progress.</td>
+              <td>Early ack corrupts data; missing ack causes hangs.</td>
+            </tr>
+            <tr>
+              <td><code>cxi_outstanding_ops_</code></td>
+              <td>Number of CXI operations that still need CQ polling.</td>
+              <td>QUIET may return too early or poll forever.</td>
+            </tr>
+            <tr>
+              <td><code>quiet_wr</code> / <code>barrier_wr</code></td>
+              <td>Special FIFO command WR ids that must pop only after control completion.</td>
+              <td>QUIET/BARRIER slots remain stuck if CXI bypasses verbs setup.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="completion">
+        <h2>WR Completion Semantics</h2>
+        <p>
+          A WR is a work request. The proxy attaches a <code>wr_id</code> to each
+          transport operation so the CQ completion can be mapped back to a GPU FIFO slot.
+          In CXI normal mode a single GPU command can become two transport operations:
+          payload write, then fenced signaling atomic.
+        </p>
+        <div class="grid cols-3">
+          <div class="card">
+            <strong>WRITE only</strong>
+            <p>Use the FIFO command <code>wr_id</code> on the CXI write. Pop when write completes.</p>
+          </div>
+          <div class="card">
+            <strong>WRITE + counter</strong>
+            <p>Use an internal id for the write. Use the FIFO command <code>wr_id</code> for the fenced atomic.</p>
+          </div>
+          <div class="card">
+            <strong>QUIET</strong>
+            <p>Drain outstanding CXI completions, then ack the QUIET command's FIFO slot.</p>
+          </div>
+        </div>
+        <div class="callout">
+          The important invariant is not "a CQ entry exists." The invariant is
+          "the command's visible effect has completed enough for the GPU to proceed."
+        </div>
+      </section>
+
+      <section id="barrier">
+        <h2>CXI Normal-Mode Barrier</h2>
+        <p>
+          The verbs path used RDMA write-with-immediate control messages. CXI normal mode
+          now uses a small host MR and native CXI atomics for the internode part while
+          keeping the existing local shared-memory barrier on each node.
+        </p>
+        <div class="svg-wrap">
+          <svg viewBox="0 0 980 360" role="img" aria-label="CXI barrier flow">
+            <defs>
+              <marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5"
+                      markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#4c5b69"></path>
+              </marker>
+            </defs>
+            <rect class="svg-box" x="40" y="55" width="210" height="90"></rect>
+            <text class="svg-label" x="65" y="88">Node 0 leader</text>
+            <text class="svg-small" x="65" y="112">root arrival slot</text>
+
+            <rect class="svg-box" x="375" y="55" width="230" height="90"></rect>
+            <text class="svg-label" x="400" y="88">Remote node leader</text>
+            <text class="svg-small" x="400" y="112">local ranks arrived</text>
+
+            <rect class="svg-box svg-green" x="720" y="55" width="210" height="90"></rect>
+            <text class="svg-label" x="745" y="88">Local ranks</text>
+            <text class="svg-small" x="745" y="112">shared LocalBarrier</text>
+
+            <path class="arrow" style="marker-end:url(#arrow2)" d="M605 100 H720"></path>
+            <path class="arrow" style="marker-end:url(#arrow2)" d="M375 100 H250"></path>
+            <text class="svg-small" x="280" y="85">atomic add arrival</text>
+
+            <path class="arrow" style="marker-end:url(#arrow2)" d="M250 130 C420 235 560 235 720 130"></path>
+            <text class="svg-small" x="420" y="250">atomic add release</text>
+
+            <rect class="svg-box svg-amber" x="125" y="245" width="240" height="70"></rect>
+            <text class="svg-label" x="150" y="275">Barrier word MR</text>
+            <text class="svg-small" x="150" y="296">registered host memory</text>
+
+            <rect class="svg-box svg-violet" x="615" y="245" width="260" height="70"></rect>
+            <text class="svg-label" x="640" y="275">FIFO BARRIER ack</text>
+            <text class="svg-small" x="640" y="296">only after release observed</text>
+          </svg>
+        </div>
+      </section>
+
+      <section id="eight-rank">
+        <h2>8-Local-Rank Assumptions</h2>
+        <p>
+          Many HT failures can look like CXI/provider problems while actually coming from
+          hidden 8-GPU-node assumptions. Always check this class of bug early when running
+          on 4-GPU nodes.
+        </p>
+        <div class="grid cols-2">
+          <div class="card">
+            <strong>What failed here</strong>
+            <p>
+              The dispatch sender read <code>is_token_in_rank</code> as a raw
+              <code>uint64_t</code>. With four local peers, that reads eight bool
+              bytes from a four-entry group and crosses routing groups.
+            </p>
+          </div>
+          <div class="card">
+            <strong>What fixed it</strong>
+            <p>
+              Pack exactly <code>NUM_MAX_NVL_PEERS</code> bool values into the byte
+              layout consumed by <code>SourceMeta</code>, leaving unused bytes zero.
+            </p>
+          </div>
+          <div class="card">
+            <strong>Other places to audit</strong>
+            <p>
+              Peer matching with <code>MAX_NUM_GPUS</code>, buffer sizing, local-index
+              metadata, dispatch/combine matrices, and vectorized bool loads.
+            </p>
+          </div>
+          <div class="card">
+            <strong>Failure shapes</strong>
+            <p>
+              CUDA misaligned-address, FIFO waits, wrong peer connections, bad route
+              metadata, correctness hash mismatch, or hangs during tuning.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="validation">
+        <h2>Validation Results</h2>
+        <p>
+          These are the fresh Apertus/GH200/CXI validation results currently
+          documented in <code>ep/README.md</code>. The normal-kernel benchmark
+          shape is 4096 tokens, hidden size 7168, top-k 8, 288 total experts,
+          4 local ranks per node, 1 Slingshot/CXI NIC per GPU, and 25 GB/s
+          (200 Gb/s) per NIC. FP8 dispatch, BF16 dispatch, and BF16 combine are
+          reported separately.
+        </p>
+        <table class="state-table">
+          <thead>
+            <tr>
+              <th>Scope</th>
+              <th>EP</th>
+              <th>Job</th>
+              <th>FP8 dispatch</th>
+              <th>BF16 dispatch</th>
+              <th>BF16 combine</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1 node / NVL</td>
+              <td>4</td>
+              <td><code>2414616</code></td>
+              <td>346.08 GB/s, 317.16 us</td>
+              <td>392.64 GB/s, 542.17 us</td>
+              <td>364.32 GB/s, 584.31 us</td>
+            </tr>
+            <tr>
+              <td>2 nodes / CXI</td>
+              <td>8</td>
+              <td><code>2414343</code></td>
+              <td>10.42 GB/s, 5794 us</td>
+              <td>10.27 GB/s, 11392 us</td>
+              <td>10.97 GB/s, 10665 us</td>
+            </tr>
+            <tr>
+              <td>4 nodes / CXI</td>
+              <td>16</td>
+              <td><code>2414361</code></td>
+              <td>5.93 GB/s, 18314 us</td>
+              <td>5.92 GB/s, 35601 us</td>
+              <td>6.19 GB/s, 33996 us</td>
+            </tr>
+            <tr>
+              <td>8 nodes / CXI</td>
+              <td>32</td>
+              <td><code>2414395</code></td>
+              <td>4.79 GB/s, 25140 us</td>
+              <td>4.85 GB/s, 48132 us</td>
+              <td>5.07 GB/s, 46135 us</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="grid cols-3" style="margin-top: 14px;">
+          <div class="card">
+            <strong>8-node combine winner</strong>
+            <p>
+              The best printed 8-node combine tuning point was
+              <code>SMs 24, NVL chunk 1, RDMA chunk 8</code>, with about
+              5.07-5.09 GB/s RDMA and 45.99-46.14 ms transmit across the
+              node-local summaries.
+            </p>
+          </div>
+          <div class="card">
+            <strong>Bigger was not better</strong>
+            <p>
+              In the <code>NVL chunk 7</code> sweep, RDMA chunks 12, 20, and
+              28 dropped to roughly 2.7-2.9 GB/s, while chunks 8, 16, 24, and
+              32 stayed near 4.8-5.0 GB/s.
+            </p>
+          </div>
+          <div class="card">
+            <strong>Debugging consequence</strong>
+            <p>
+              Treat chunk size as a discrete scheduling/proxy/provider tuning
+              point. Do not assume increasing the RDMA chunk monotonically
+              improves CXI bandwidth.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="debugging">
+        <h2>Debugging Ladder</h2>
+        <p>
+          The productive order is to prove the transport primitive, then the proxy
+          command lifecycle, then the kernel layout. Avoid jumping directly from a
+          CUDA symptom to a CXI conclusion.
+        </p>
+        <ol class="checklist">
+          <li>Force CXI explicitly: <code>USE_LIBFABRIC_CXI=1</code>, <code>UCCL_EP_TRANSPORT=cxi</code>, <code>FI_PROVIDER=cxi</code>.</li>
+          <li>Build for the node shape: <code>NUM_MAX_NVL_PEERS=4</code> on current 4-GPU Apertus nodes.</li>
+          <li>Run the smallest low-latency two-node correctness case.</li>
+          <li>Run small HT with <code>CUDA_LAUNCH_BLOCKING=1</code> to localize kernel failures.</li>
+          <li>If a FIFO slot hangs, inspect <code>wr_id</code>, <code>acked_wrs_</code>, <code>fifo_pending_</code>, and special QUIET/BARRIER WR state.</li>
+          <li>If CUDA reports misalignment, inspect vectorized loads and hidden 8-local-rank assumptions before blaming libfabric.</li>
+          <li>Only after small HT passes, run larger HT without <code>CUDA_LAUNCH_BLOCKING=1</code>.</li>
+        </ol>
+      </section>
+
+      <section id="snippets">
+        <h2>Code Snippets</h2>
+        <p>
+          These are short, source-linked extracts or faithful reductions of the
+          implementation. Use them as landmarks when moving between a runtime symptom
+          and the owning code.
+        </p>
+        <div class="snippet-grid">
+          <div class="card">
+            <strong>Command wire format</strong>
+            <p class="source-note">Source: <code>ep/include/ring_buffer.cuh</code></p>
+            <pre><code>struct TransferCmd {
+  CmdType cmd_type;      // WRITE, ATOMIC, QUIET, BARRIER plus mode bits
+  uint8_t dst_rank;
+  union {
+    struct {
+      uint32_t atomic_val : 8;
+      uint32_t bytes : 24;
+    };
+    uint32_t bytes_and_val;
+  };
+  uint32_t req_rptr;     // remote buffer offset or counter offset
+  union {
+    uint32_t req_lptr;   // local buffer offset for WRITE
+    int value;           // value for ATOMIC
+  };
+  union {
+    uint16_t expert_idx;     // LL expert/token packing
+    uint16_t atomic_offset;  // normal-mode counter slot
+  };
+};</code></pre>
+          </div>
+
+          <div class="card">
+            <strong>GPU publishes a FIFO command</strong>
+            <p class="source-note">Source: <code>ep/include/d2h_queue_device.cuh</code> and <code>ep/include/uccl_ibgda.cuh</code></p>
+            <pre><code>TransferCmd cmd{};
+cmd.cmd_type = make_cmd_type(CmdType::WRITE, is_combine, low_latency);
+cmd.dst_rank = dst_rank;
+cmd.bytes = bytes;
+cmd.req_rptr = remote_offset;
+cmd.req_lptr = local_offset;
+cmd.atomic_offset = counter_offset;
+
+uint64_t fifo_slot = 0;
+d2h.atomic_set_and_commit(cmd, &amp;fifo_slot);</code></pre>
+          </div>
+
+          <div class="card">
+            <strong>LL packs expert and token count</strong>
+            <p class="source-note">Source: <code>ep/include/ring_buffer.cuh</code></p>
+            <pre><code>// atomic_val carries num_tokens[7:0] and expert_idx carries
+// [9:0] expert plus [14:10] num_tokens[12:8].
+cmd.atomic_val = num_tokens &amp; 0xff;
+cmd.expert_idx = pack_ll_expert_slot(expert_idx, num_tokens);
+
+uint32_t expert = unpack_ll_expert(cmd.expert_idx);
+uint32_t tokens = unpack_ll_num_tokens(cmd.expert_idx, cmd.atomic_val);</code></pre>
+          </div>
+
+          <div class="card">
+            <strong>4-peer-safe routing bool packing</strong>
+            <p class="source-note">Source: <code>ep/src/internode.cu</code></p>
+            <pre><code>__device__ __forceinline__ uint64_t
+pack_is_token_in_nvl_ranks(bool const* values) {
+  uint64_t packed = 0;
+#pragma unroll
+  for (int i = 0; i &lt; NUM_MAX_NVL_PEERS; ++i) {
+    packed |= static_cast&lt;uint64_t&gt;(values[i]) &lt;&lt; (i * 8);
+  }
+  return packed;
+}</code></pre>
+          </div>
+
+          <div class="card">
+            <strong>Proxy loop shape</strong>
+            <p class="source-note">Source: <code>ep/src/proxy.cpp</code></p>
+            <pre><code>while (!stop) {
+  poll_cxi_completions();     // CQ entries -> acked_wrs_
+  notify_gpu();               // completed WR ids pop FIFO slots
+  post_gpu_command(tail, seen);
+  barrier_check();            // normal-mode barrier progress
+}</code></pre>
+          </div>
+
+          <div class="card">
+            <strong>WRITE plus signaling atomic completion</strong>
+            <p class="source-note">Source: <code>ep/src/proxy.cpp</code> and <code>ep/src/cxi_transport.cpp</code></p>
+            <pre><code>// One GPU FIFO command may become two CXI operations.
+// The write uses an internal WR id so it does not pop the FIFO.
+post_write(kCxiInternalWrId, local_off, remote_off, bytes);
+
+// The fenced atomic uses the FIFO WR id. Its completion means
+// payload ordering plus receiver-visible counter are complete.
+post_atomic_add(fifo_wr_id, counter_off, value, FI_FENCE);</code></pre>
+          </div>
+
+          <div class="card">
+            <strong>Runtime owns buffer pointers</strong>
+            <p class="source-note">Source: <code>ep/src/uccl_ep.cc</code></p>
+            <pre><code>void set_rdma_buffer(std::uintptr_t addr, bool is_host_ptr) {
+  rdma_buffer_ptr = reinterpret_cast&lt;void*&gt;(addr);
+}
+
+void set_atomic_buffer_ptr(void* ptr) {
+  if (ptr == nullptr) throw std::invalid_argument("atomic buffer null");
+  atomic_buffer_ptr = ptr;
+}</code></pre>
+          </div>
+
+          <div class="card">
+            <strong>Python connects proxy atomic memory</strong>
+            <p class="source-note">Source: <code>ep/bench/buffer.py</code></p>
+            <pre><code>self.connect_atomic_buffer(self.proxies[0])
+
+for proxy in self.proxies[1:]:
+    proxy.set_atomic_buffer_ptr(
+        self.proxies[0].get_atomic_buffer_ptr()
+    )</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="commands">
+        <h2>Known Validation Commands</h2>
+        <p>
+          These commands are examples of the current validation shape. Keep the explicit
+          master address/port and avoid <code>torchrun --standalone</code> in this environment.
+        </p>
+        <pre><code># Small 2-node high-throughput CXI validation shape
+export USE_LIBFABRIC_CXI=1
+export UCCL_EP_TRANSPORT=cxi
+export FI_PROVIDER=cxi
+export NUM_MAX_NVL_PEERS=4
+export CUDA_HOME=/usr/local/cuda
+export TORCH_CUDA_ARCH_LIST=9.0
+
+torchrun --nnodes=2 --node_rank=$SLURM_NODEID \
+  --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
+  --nproc_per_node=4 \
+  bench/test_internode.py \
+  --num-processes 4 \
+  --num-tokens 64 \
+  --hidden 1024 \
+  --num-topk 4 \
+  --num-experts 16</code></pre>
+      </section>
+    </div>
+  </main>
+
+  <div class="footer">
+    UCCL EP CXI HT Explainer. Keep this file in sync with UCCL_EP_CXI_NATIVE_ATOMICS_HANDOFF.md.
+  </div>
+
+  <script>
+    const state = {
+      peers: 4,
+      flow: 0,
+      playing: false,
+      timer: null,
+      linkAnimating: false,
+      linkTimer: null,
+      hotPair: 0
+    };
+
+    const flow = [
+      {
+        title: "GPU enqueues",
+        text: "Kernel writes compact commands into the D2H FIFO.",
+        fifo: ["WRITE", "WRITE+ATOMIC", "QUIET", "BARRIER", "", "", "", ""],
+        proxy: ["idle", "idle", "idle", "idle", "", "", "", ""]
+      },
+      {
+        title: "Proxy dequeues",
+        text: "CPU proxy accepts FIFO slots and assigns unique WR ids.",
+        fifo: ["WRITE", "WRITE+ATOMIC", "QUIET", "BARRIER", "", "", "", ""],
+        proxy: ["pending", "pending", "pending", "pending", "", "", "", ""]
+      },
+      {
+        title: "Post CXI ops",
+        text: "WRITE posts fi_write. WRITE+ATOMIC posts fi_write plus fenced fi_atomicmsg.",
+        fifo: ["WRITE", "WRITE+ATOMIC", "QUIET", "BARRIER", "", "", "", ""],
+        proxy: ["fi_write", "write internal", "drain", "barrier atomic", "", "", "", ""]
+      },
+      {
+        title: "Poll CQ",
+        text: "CQ completions are mapped back through wr_id. Internal WR ids do not pop GPU slots.",
+        fifo: ["WRITE", "WRITE+ATOMIC", "QUIET", "BARRIER", "", "", "", ""],
+        proxy: ["done", "atomic done", "drained", "released", "", "", "", ""]
+      },
+      {
+        title: "Ack FIFO",
+        text: "Only semantically complete commands pop the FIFO and unblock the GPU.",
+        fifo: ["WRITE", "WRITE+ATOMIC", "QUIET", "BARRIER", "", "", "", ""],
+        proxy: ["popped", "popped", "popped", "popped", "", "", "", ""],
+        done: true
+      }
+    ];
+
+    function setLinkAnimation(enabled) {
+      state.linkAnimating = enabled;
+      const btn = document.getElementById("animateLinks");
+      btn.textContent = enabled ? "Pause links" : "Animate links";
+      btn.classList.toggle("active", enabled);
+      if (state.linkTimer) {
+        clearInterval(state.linkTimer);
+        state.linkTimer = null;
+      }
+      if (enabled) {
+        state.linkTimer = setInterval(() => {
+          state.hotPair = (state.hotPair + 1) % state.peers;
+          renderRanks();
+        }, 650);
+      }
+    }
+
+    function renderRanks() {
+      const peers = state.peers;
+      state.hotPair = state.hotPair % peers;
+      const height = peers === 4 ? 360 : 560;
+      const leftX = 70;
+      const rightX = 650;
+      const nodeW = 260;
+      const topY = 74;
+      const rowGap = peers === 4 ? 58 : 52;
+      const rankW = 150;
+      const rankH = 38;
+      const leftRankX = leftX + 55;
+      const rightRankX = rightX + 55;
+
+      const defs = `<defs>
+        <marker id="rankArrow" viewBox="0 0 10 10" refX="8" refY="5"
+                markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#91a3b5"></path>
+        </marker>
+      </defs>`;
+      let links = "";
+      let ranks = "";
+      for (let i = 0; i < peers; ++i) {
+        const y = topY + i * rowGap;
+        const leftRank = i;
+        const rightRank = i + peers;
+        const hot = state.linkAnimating && i === state.hotPair;
+        links += `<path class="rank-link ${hot ? "hot" : ""}" d="M${leftRankX + rankW} ${y + rankH / 2} C${leftRankX + 250} ${y + rankH / 2}, ${rightRankX - 100} ${y + rankH / 2}, ${rightRankX} ${y + rankH / 2}" marker-end="url(#rankArrow)"></path>`;
+        ranks += `<rect class="rank-box ${peers !== 8 ? "warn" : ""}" x="${leftRankX}" y="${y}" width="${rankW}" height="${rankH}"></rect>
+          <text class="svg-label" x="${leftRankX + 14}" y="${y + 24}">R${leftRank}</text>
+          <text class="svg-small" x="${leftRankX + 76}" y="${y + 24}">nvl ${i}</text>
+          <rect class="rank-box ${peers !== 8 ? "warn" : ""}" x="${rightRankX}" y="${y}" width="${rankW}" height="${rankH}"></rect>
+          <text class="svg-label" x="${rightRankX + 14}" y="${y + 24}">R${rightRank}</text>
+          <text class="svg-small" x="${rightRankX + 76}" y="${y + 24}">nvl ${i}</text>`;
+      }
+
+      document.getElementById("rankDiagram").innerHTML = `<svg class="rank-svg" viewBox="0 0 980 ${height}" role="img" aria-label="${peers} local peers per node layout">
+        ${defs}
+        <rect class="node-shell" x="${leftX}" y="34" width="${nodeW}" height="${height - 68}"></rect>
+        <rect class="node-shell" x="${rightX}" y="34" width="${nodeW}" height="${height - 68}"></rect>
+        <text class="svg-label" x="${leftX + 18}" y="58">node 0</text>
+        <text class="svg-small" x="${leftX + 168}" y="58">${peers} local ranks</text>
+        <text class="svg-label" x="${rightX + 18}" y="58">node 1</text>
+        <text class="svg-small" x="${rightX + 168}" y="58">${peers} local ranks</text>
+        ${links}
+        ${ranks}
+        <text class="svg-small" x="394" y="${height - 36}">Same local index maps to the internode peer. On 4-GPU nodes, all 8-peer assumptions are suspect.</text>
+      </svg>`;
+
+      document.getElementById("rankPairList").innerHTML = Array.from({length: peers}, (_, i) => {
+        const hot = state.linkAnimating && i === state.hotPair;
+        return `<div class="pair-chip ${hot ? "hot" : ""}">nvl ${i}: R${i} &lt;-&gt; R${i + peers}</div>`;
+      }).join("");
+      document.getElementById("shape4").classList.toggle("active", peers === 4);
+      document.getElementById("shape8").classList.toggle("active", peers === 8);
+    }
+
+    function slotClass(text) {
+      if (!text) return "slot";
+      if (text.includes("WRITE+ATOMIC")) return "slot write-atomic";
+      if (text.includes("WRITE")) return "slot write";
+      if (text.includes("ATOMIC")) return "slot atomic";
+      if (text.includes("QUIET")) return "slot quiet";
+      if (text.includes("BARRIER")) return "slot barrier";
+      if (text.includes("popped")) return "slot done";
+      if (text.includes("done") || text.includes("released") || text.includes("drained")) return "slot done";
+      return "slot";
+    }
+
+    function renderFlow() {
+      const data = flow[state.flow];
+      document.getElementById("flowCaption").textContent = `${state.flow + 1} / ${flow.length}: ${data.title}`;
+      document.getElementById("flowSteps").innerHTML = flow.map((step, i) => `
+        <div class="flow-step ${i === state.flow ? "active" : ""}">
+          <div class="num">${i + 1}</div>
+          <h3>${step.title}</h3>
+          <p>${step.text}</p>
+        </div>
+      `).join("");
+      document.getElementById("fifoSlots").innerHTML = data.fifo.map((s, i) =>
+        `<div class="${slotClass(data.done ? "popped" : s)}">${s || `slot ${i}`}</div>`
+      ).join("");
+      document.getElementById("proxySlots").innerHTML = data.proxy.map((s, i) =>
+        `<div class="${slotClass(s)}">${s || `state ${i}`}</div>`
+      ).join("");
+    }
+
+    function setFlow(next) {
+      state.flow = (next + flow.length) % flow.length;
+      renderFlow();
+    }
+
+    document.getElementById("shape4").addEventListener("click", () => {
+      state.peers = 4;
+      state.hotPair = 0;
+      renderRanks();
+    });
+    document.getElementById("shape8").addEventListener("click", () => {
+      state.peers = 8;
+      state.hotPair = 0;
+      renderRanks();
+    });
+    document.getElementById("animateLinks").addEventListener("click", () => {
+      setLinkAnimation(!state.linkAnimating);
+      renderRanks();
+    });
+
+    document.getElementById("prevFlow").addEventListener("click", () => setFlow(state.flow - 1));
+    document.getElementById("nextFlow").addEventListener("click", () => setFlow(state.flow + 1));
+    document.getElementById("playFlow").addEventListener("click", () => {
+      state.playing = !state.playing;
+      document.getElementById("playFlow").textContent = state.playing ? "Pause" : "Play";
+      if (state.timer) clearInterval(state.timer);
+      if (state.playing) {
+        state.timer = setInterval(() => setFlow(state.flow + 1), 1300);
+      }
+    });
+
+    renderRanks();
+    renderFlow();
+  </script>
+</body>
+</html>
