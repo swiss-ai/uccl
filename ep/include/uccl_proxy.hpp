@@ -94,7 +94,7 @@ class UcclProxy {
   void* gpu_buffer_addr_;
   std::vector<PeerMeta> peers_;
   int local_rank_;
-  void* atomic_buffer_ptr_;
+  void* atomic_buffer_ptr_ = nullptr;
   bool atomic_buffer_is_host_allocated_ =
       false;  // true => cudaFreeHost, false => cudaFree
   int node_idx_;
