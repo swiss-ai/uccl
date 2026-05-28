@@ -2,8 +2,17 @@
 // Each GPU sends 128 x 7KB messages randomly to other GPUs across nodes
 
 #include <arpa/inet.h>
+#ifndef USE_LIBFABRIC_CXI
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
+#else
+#include <rdma/fabric.h>
+#include <rdma/fi_cm.h>
+#include <rdma/fi_domain.h>
+#include <rdma/fi_endpoint.h>
+#include <rdma/fi_eq.h>
+#include <rdma/fi_rma.h>
+#endif
 #include <netinet/in.h>
 #include <algorithm>
 #include <atomic>
@@ -22,7 +31,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifndef NUM_GPUS_PER_NODE
 constexpr int NUM_GPUS_PER_NODE = 8;
+#endif
 constexpr int NUM_NICS_PER_GPU = 1;  // 1 for p6, 2 for p5en
 constexpr size_t MSG_SIZE = 7168;    // 7KB
 constexpr int NUM_MSGS = 128;
@@ -57,6 +68,123 @@ struct RDMAConnectionInfo {
   uint64_t addr;
 };
 
+#ifdef USE_LIBFABRIC_CXI
+struct CxiConnectionInfo {
+  uint32_t ep_name_len = 0;
+  uint8_t ep_name[256] = {};
+  uint64_t mr_key = 0;
+  uint64_t addr = 0;
+};
+
+void check_fi(int rc, char const* what) {
+  if (rc < 0) {
+    fprintf(stderr, "%s failed: %s\n", what, fi_strerror(-rc));
+    exit(1);
+  }
+}
+
+struct CxiContext {
+  fid_fabric* fabric = nullptr;
+  fid_domain* domain = nullptr;
+  fid_ep* ep = nullptr;
+  fid_cq* cq = nullptr;
+  fid_av* av = nullptr;
+  fid_mr* mr = nullptr;
+  void* gpu_buf = nullptr;
+  size_t buf_size = 0;
+  CxiConnectionInfo local_info = {};
+  std::vector<fi_addr_t> peer_addrs;
+  std::vector<CxiConnectionInfo> remote_infos;
+};
+
+fid_mr* register_cuda_mr(fid_domain* domain, fid_ep* ep, void* ptr, size_t len,
+                         int cuda_device) {
+  int old_device = 0;
+  CUDA_CHECK(cudaGetDevice(&old_device));
+  CUDA_CHECK(cudaSetDevice(cuda_device));
+
+  iovec iov = {};
+  iov.iov_base = ptr;
+  iov.iov_len = len;
+  fi_mr_attr attr = {};
+  attr.mr_iov = &iov;
+  attr.iov_count = 1;
+  attr.access = FI_SEND | FI_RECV | FI_WRITE | FI_READ | FI_REMOTE_WRITE |
+                FI_REMOTE_READ;
+  attr.iface = FI_HMEM_CUDA;
+  attr.device.cuda = static_cast<uint64_t>(cuda_device);
+
+  fid_mr* mr = nullptr;
+  int rc = fi_mr_regattr(domain, &attr, 0, &mr);
+  CUDA_CHECK(cudaSetDevice(old_device));
+  check_fi(rc, "fi_mr_regattr(cuda)");
+  check_fi(fi_mr_bind(mr, &ep->fid, 0), "fi_mr_bind");
+  check_fi(fi_control(&mr->fid, FI_ENABLE, nullptr), "fi_control(FI_ENABLE)");
+  return mr;
+}
+
+void cxi_init(CxiContext& cxi, int local_rank) {
+  fi_info* hints = fi_allocinfo();
+  if (!hints) {
+    fprintf(stderr, "fi_allocinfo failed\n");
+    exit(1);
+  }
+  hints->caps = FI_RMA | FI_WRITE | FI_REMOTE_WRITE | FI_REMOTE_READ |
+                FI_HMEM | FI_LOCAL_COMM | FI_REMOTE_COMM;
+  hints->mode = FI_CONTEXT;
+  hints->ep_attr->type = FI_EP_RDM;
+  hints->fabric_attr->prov_name = strdup("cxi");
+  hints->domain_attr->mr_mode =
+      FI_MR_ENDPOINT | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
+  hints->domain_attr->threading = FI_THREAD_DOMAIN;
+
+  fi_info* info = nullptr;
+  int rc = fi_getinfo(FI_VERSION(1, 15), nullptr, nullptr, 0, hints, &info);
+  fi_freeinfo(hints);
+  check_fi(rc, "fi_getinfo(cxi)");
+
+  check_fi(fi_fabric(info->fabric_attr, &cxi.fabric, nullptr), "fi_fabric");
+  check_fi(fi_domain(cxi.fabric, info, &cxi.domain, nullptr), "fi_domain");
+  fi_cq_attr cq_attr = {};
+  cq_attr.format = FI_CQ_FORMAT_CONTEXT;
+  cq_attr.size = 131072;
+  check_fi(fi_cq_open(cxi.domain, &cq_attr, &cxi.cq, nullptr), "fi_cq_open");
+  fi_av_attr av_attr = {};
+  av_attr.type = FI_AV_MAP;
+  check_fi(fi_av_open(cxi.domain, &av_attr, &cxi.av, nullptr), "fi_av_open");
+  check_fi(fi_endpoint(cxi.domain, info, &cxi.ep, nullptr), "fi_endpoint");
+  check_fi(fi_ep_bind(cxi.ep, &cxi.cq->fid, FI_TRANSMIT | FI_RECV),
+           "fi_ep_bind(cq)");
+  check_fi(fi_ep_bind(cxi.ep, &cxi.av->fid, 0), "fi_ep_bind(av)");
+  check_fi(fi_enable(cxi.ep), "fi_enable");
+  fi_freeinfo(info);
+
+  cxi.buf_size = NUM_MSGS * MSG_SIZE;
+  CUDA_CHECK(cudaMalloc(&cxi.gpu_buf, cxi.buf_size));
+  CUDA_CHECK(cudaMemset(cxi.gpu_buf, local_rank, cxi.buf_size));
+  cxi.mr = register_cuda_mr(cxi.domain, cxi.ep, cxi.gpu_buf, cxi.buf_size,
+                            local_rank);
+  cxi.local_info.addr = reinterpret_cast<uint64_t>(cxi.gpu_buf);
+  cxi.local_info.mr_key = fi_mr_key(cxi.mr);
+
+  size_t ep_name_len = sizeof(cxi.local_info.ep_name);
+  check_fi(fi_getname(&cxi.ep->fid, cxi.local_info.ep_name, &ep_name_len),
+           "fi_getname");
+  cxi.local_info.ep_name_len = static_cast<uint32_t>(ep_name_len);
+}
+
+void cxi_destroy(CxiContext& cxi) {
+  if (cxi.mr) fi_close(&cxi.mr->fid);
+  if (cxi.ep) fi_close(&cxi.ep->fid);
+  if (cxi.av) fi_close(&cxi.av->fid);
+  if (cxi.cq) fi_close(&cxi.cq->fid);
+  if (cxi.domain) fi_close(&cxi.domain->fid);
+  if (cxi.fabric) fi_close(&cxi.fabric->fid);
+  if (cxi.gpu_buf) cudaFree(cxi.gpu_buf);
+}
+#endif
+
+#ifndef USE_LIBFABRIC_CXI
 struct NicContext {
   ibv_context* ctx = nullptr;
   ibv_pd* pd = nullptr;
@@ -65,7 +193,9 @@ struct NicContext {
   void* gpu_buf = nullptr;
   size_t buf_size = 0;
 };
+#endif
 
+#ifndef USE_LIBFABRIC_CXI
 struct PeerEndpoint {
   ibv_qp* qp = nullptr;
   ibv_ah* ah = nullptr;
@@ -73,6 +203,7 @@ struct PeerEndpoint {
   uint32_t remote_rkey = 0;
   uint64_t remote_addr = 0;
 };
+#endif
 
 // Prepopulated random dispatch table
 std::vector<int> generate_dispatch_table(int rank, int world_size) {
@@ -85,6 +216,7 @@ std::vector<int> generate_dispatch_table(int rank, int world_size) {
   return table;
 }
 
+#ifndef USE_LIBFABRIC_CXI
 void get_gid(ibv_context* ctx, int port, int index, uint8_t* gid) {
   ibv_gid g;
   if (ibv_query_gid(ctx, port, index, &g)) {
@@ -167,6 +299,7 @@ ibv_ah* create_ah(ibv_pd* pd, uint8_t* remote_gid) {
   }
   return ah;
 }
+#endif
 
 void pin_to_numa(int local_rank) {
   // For p5.48xlarge: 8 GPUs, 2 NUMA nodes
@@ -212,6 +345,7 @@ void pin_to_numa(int local_rank) {
          local_rank);
 }
 
+#ifndef USE_LIBFABRIC_CXI
 void tcp_control_init(
     int rank, int world_size, char const* master_ip,
     std::vector<RDMAConnectionInfo>& local_info,
@@ -285,6 +419,7 @@ void tcp_control_init(
     control_socks.push_back(sock);
   }
 }
+#endif
 
 void tcp_barrier(int rank, int world_size) {
   if (rank == 0) {
@@ -317,6 +452,7 @@ void tcp_control_cleanup(int rank, int world_size) {
   }
 }
 
+#ifndef USE_LIBFABRIC_CXI
 struct PollResult {
   int send_completions = 0;
   int recv_completions = 0;
@@ -345,7 +481,199 @@ PollResult poll_cq(ibv_cq* cq, int max_poll) {
   }
   return result;
 }
+#endif
 
+#ifdef USE_LIBFABRIC_CXI
+void cxi_tcp_control_init(
+    int rank, int world_size, char const* master_ip,
+    std::vector<CxiConnectionInfo>& remote_info) {
+  remote_info.resize(world_size);
+
+  if (rank == 0) {
+    control_listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    int opt = 1;
+    setsockopt(control_listenfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(TCP_PORT_BASE);
+    addr.sin_addr.s_addr = INADDR_ANY;
+    bind(control_listenfd, (sockaddr*)&addr, sizeof(addr));
+    listen(control_listenfd, world_size);
+
+    control_socks.resize(world_size, -1);
+    for (int i = 1; i < world_size; i++) {
+      int sock = accept(control_listenfd, nullptr, nullptr);
+      int peer_rank = -1;
+      recv(sock, &peer_rank, sizeof(peer_rank), MSG_WAITALL);
+      recv(sock, &remote_info[peer_rank], sizeof(CxiConnectionInfo),
+           MSG_WAITALL);
+      control_socks[peer_rank] = sock;
+    }
+
+    for (int i = 1; i < world_size; i++) {
+      send(control_socks[i], remote_info.data(),
+           sizeof(CxiConnectionInfo) * world_size, 0);
+    }
+  } else {
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(TCP_PORT_BASE);
+    inet_pton(AF_INET, master_ip, &addr.sin_addr);
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    int retry_count = 0;
+    while (connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
+      if (++retry_count > 100) {
+        fprintf(stderr,
+                "Rank %d: Failed to connect to master after 100 retries\n",
+                rank);
+        exit(1);
+      }
+      close(sock);
+      sock = socket(AF_INET, SOCK_STREAM, 0);
+      usleep(100000);
+    }
+
+    send(sock, &rank, sizeof(rank), 0);
+    send(sock, &remote_info[rank], sizeof(CxiConnectionInfo), 0);
+    recv(sock, remote_info.data(), sizeof(CxiConnectionInfo) * world_size,
+         MSG_WAITALL);
+    control_socks.push_back(sock);
+  }
+}
+
+void run_cxi_benchmark(int rank, int local_rank, int world_size,
+                       char const* master_ip) {
+  pin_to_numa(local_rank);
+  CUDA_CHECK(cudaSetDevice(local_rank));
+
+  int local_world_size = NUM_GPUS_PER_NODE;
+  if (char const* env = std::getenv("LOCAL_WORLD_SIZE")) {
+    local_world_size = std::max(1, std::atoi(env));
+  }
+
+  CxiContext cxi;
+  cxi_init(cxi, local_rank);
+  std::vector<CxiConnectionInfo> remote_info(world_size);
+  remote_info[rank] = cxi.local_info;
+  cxi_tcp_control_init(rank, world_size, master_ip, remote_info);
+
+  cxi.peer_addrs.resize(world_size, FI_ADDR_UNSPEC);
+  cxi.remote_infos = remote_info;
+  for (int r = 0; r < world_size; ++r) {
+    if (r == rank) continue;
+    fi_addr_t addr = FI_ADDR_UNSPEC;
+    int rc = fi_av_insert(cxi.av, remote_info[r].ep_name, 1, &addr, 0, nullptr);
+    if (rc != 1) {
+      if (rc < 0) check_fi(rc, "fi_av_insert");
+      fprintf(stderr, "fi_av_insert inserted no address\n");
+      exit(1);
+    }
+    cxi.peer_addrs[r] = addr;
+  }
+
+  auto dispatch_table = generate_dispatch_table(rank, world_size);
+  int node_rank = rank / local_world_size;
+  CUDA_CHECK(cudaDeviceSynchronize());
+  tcp_barrier(rank, world_size);
+
+  constexpr int NUM_ROUNDS = 50;
+  constexpr int WARMUP_ROUNDS = 20;
+  std::vector<double> round_times;
+  int total_ops = NUM_MSGS * TOPK;
+
+  struct WriteCtx {
+    fi_context context = {};
+  };
+  std::vector<WriteCtx> contexts(WINDOW_SIZE);
+  size_t next_ctx = 0;
+
+  for (int round = 0; round < NUM_ROUNDS; round++) {
+    tcp_barrier(rank, world_size);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    auto start = std::chrono::high_resolution_clock::now();
+    int send_completed = 0;
+    int send_inflight = 0;
+    int network_ops = 0;
+
+    auto poll_cxi = [&](int max_poll) {
+      fi_cq_entry entries[64] = {};
+      int budget = std::min(64, max_poll);
+      ssize_t rc = fi_cq_read(cxi.cq, entries, budget);
+      if (rc == -FI_EAGAIN) return 0;
+      if (rc < 0) {
+        fi_cq_err_entry err = {};
+        ssize_t erc = fi_cq_readerr(cxi.cq, &err, 0);
+        if (erc >= 0) {
+          fprintf(stderr, "CXI CQ error: %s\n",
+                  fi_cq_strerror(cxi.cq, err.prov_errno, err.err_data, nullptr,
+                                 0));
+          exit(1);
+        }
+        check_fi(static_cast<int>(rc), "fi_cq_read");
+      }
+      return static_cast<int>(rc);
+    };
+
+    for (int op_idx = 0; op_idx < total_ops; op_idx++) {
+      int dst_rank = dispatch_table[op_idx];
+      int dst_node = dst_rank / local_world_size;
+      if (dst_node == node_rank) continue;
+      network_ops++;
+
+      int msg_id = op_idx / TOPK;
+      auto& ctx = contexts[next_ctx++ % contexts.size()];
+      char* local = static_cast<char*>(cxi.gpu_buf) + msg_id * MSG_SIZE;
+      ssize_t rc = fi_write(cxi.ep, local, MSG_SIZE, fi_mr_desc(cxi.mr),
+                            cxi.peer_addrs[dst_rank], msg_id * MSG_SIZE,
+                            remote_info[dst_rank].mr_key, &ctx.context);
+      check_fi(static_cast<int>(rc), "fi_write(cxi alltoall)");
+      send_inflight++;
+
+      while (send_inflight >= WINDOW_SIZE) {
+        int ne = poll_cxi(send_inflight);
+        send_completed += ne;
+        send_inflight -= ne;
+        if (ne == 0) sched_yield();
+      }
+    }
+
+    while (send_completed < network_ops) {
+      int ne = poll_cxi(network_ops - send_completed);
+      send_completed += ne;
+      if (ne == 0) sched_yield();
+    }
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed_us =
+        std::chrono::duration<double, std::micro>(end - start).count();
+    round_times.push_back(elapsed_us);
+    if (rank == 0) printf("Round %d: %.2f us\n", round, elapsed_us);
+    tcp_barrier(rank, world_size);
+  }
+
+  double sum = 0.0;
+  for (int i = WARMUP_ROUNDS; i < NUM_ROUNDS; i++) sum += round_times[i];
+  double avg_us = sum / (NUM_ROUNDS - WARMUP_ROUNDS);
+  printf("Rank %d: average of last %d rounds: %.2f us\n", rank,
+         NUM_ROUNDS - WARMUP_ROUNDS, avg_us);
+  if (rank == 0) {
+    double total_data_gb = (NUM_MSGS * TOPK * MSG_SIZE) / 1e9;
+    double elapsed_s = avg_us / 1e6;
+    printf("Average time: %.2f us\n", avg_us);
+    printf("Throughput: %.2f GB/s\n", total_data_gb / elapsed_s);
+  }
+
+  tcp_barrier(rank, world_size);
+  tcp_control_cleanup(rank, world_size);
+  cxi_destroy(cxi);
+}
+#endif
+
+#ifndef USE_LIBFABRIC_CXI
 void run_benchmark(int rank, int local_rank, int world_size,
                    char const* master_ip) {
   // Pin to NUMA node based on GPU
@@ -633,10 +961,14 @@ void run_benchmark(int rank, int local_rank, int world_size,
     if (nic.gpu_buf) cudaFree(nic.gpu_buf);
   }
 }
+#endif
 
 int main(int argc, char** argv) {
   if (argc < 4) {
-    fprintf(stderr, "Usage: %s <rank> <world_size> <master_ip>\n", argv[0]);
+    fprintf(stderr,
+            "Usage: %s <rank> <world_size> <master_ip> [local_rank] "
+            "[verbs|cxi]\n",
+            argv[0]);
     return 1;
   }
 
@@ -644,9 +976,22 @@ int main(int argc, char** argv) {
   int world_size = atoi(argv[2]);
   char const* master_ip = argv[3];
 
-  int local_rank = rank % NUM_GPUS_PER_NODE;
+  int local_rank = (argc >= 5) ? atoi(argv[4]) : rank % NUM_GPUS_PER_NODE;
+  char const* transport = (argc >= 6) ? argv[5] : "verbs";
 
+#ifdef USE_LIBFABRIC_CXI
+  if (strcmp(transport, "cxi") != 0) {
+    fprintf(stderr, "This binary was built with USE_LIBFABRIC_CXI=1; pass cxi\n");
+    return 1;
+  }
+  run_cxi_benchmark(rank, local_rank, world_size, master_ip);
+#else
+  if (strcmp(transport, "verbs") != 0) {
+    fprintf(stderr, "This binary was built for verbs/EFA; pass verbs\n");
+    return 1;
+  }
   run_benchmark(rank, local_rank, world_size, master_ip);
+#endif
 
   return 0;
 }
