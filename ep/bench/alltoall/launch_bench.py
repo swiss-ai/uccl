@@ -23,6 +23,8 @@ def main():
         choices=["verbs", "cxi"],
         default=os.environ.get("ALLTOALL_TRANSPORT", "verbs"),
     )
+    parser.add_argument("--msg-size-kb", type=int, default=7)
+    parser.add_argument("--pattern", choices=["cross", "rail"], default="cross")
     args = parser.parse_args()
 
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
@@ -57,6 +59,8 @@ def main():
         master_addr,
         str(local_rank),
         args.transport,
+        str(args.msg_size_kb * 1024),
+        args.pattern,
     ]
 
     try:
