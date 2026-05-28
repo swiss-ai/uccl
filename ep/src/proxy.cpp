@@ -238,6 +238,8 @@ void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
 
 void Proxy::init_common() {
   int const my_rank = cfg_.rank;
+  ctx_.local_rank = cfg_.local_rank;
+  ctx_.thread_idx = cfg_.thread_idx;
 
   if (use_cxi_transport()) {
     if (ctxs_for_all_ranks_.empty()) {
