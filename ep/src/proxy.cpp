@@ -254,18 +254,26 @@ void Proxy::init_common() {
           "UCCL_EP_TRANSPORT=cxi requires atomic_buffer_ptr to be set");
     }
 
-    cxi_transport_ = std::make_unique<CxiTransport>();
-    cxi_transport_->init(ctx_);
-    cxi_transport_->register_main_buffer(cfg_.gpu_buffer, cfg_.total_size,
-                                         cfg_.local_rank);
-    cxi_transport_->register_atomic_buffer(atomic_buffer_ptr_,
-                                           kAtomicBufferSize, cfg_.local_rank);
-
     int num_ranks = ctxs_for_all_ranks_.size();
     local_infos_.assign(num_ranks, RDMAConnectionInfo{});
     remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
+    cxi_transports_by_rank_.clear();
+    cxi_transports_by_rank_.resize(num_ranks);
+    cxi_transport_ = nullptr;
     for (int peer = 0; peer < num_ranks; ++peer) {
-      local_infos_[peer] = cxi_transport_->local_info();
+      if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
+          !is_normal_mode_remote_peer(cfg_, my_rank, peer))
+        continue;
+
+      auto transport = std::make_unique<CxiTransport>();
+      transport->init(ctx_);
+      transport->register_main_buffer(cfg_.gpu_buffer, cfg_.total_size,
+                                      cfg_.local_rank);
+      transport->register_atomic_buffer(atomic_buffer_ptr_, kAtomicBufferSize,
+                                        cfg_.local_rank);
+      local_infos_[peer] = transport->local_info();
+      if (!cxi_transport_) cxi_transport_ = transport.get();
+      cxi_transports_by_rank_[peer] = std::move(transport);
     }
 
     std::thread receiver_thread([this, num_ranks, my_rank]() {
@@ -308,7 +316,11 @@ void Proxy::init_common() {
       c.remote_atomic_buffer_addr = remote_infos_[peer].atomic_buffer_addr;
       c.remote_atomic_buffer_len = remote_infos_[peer].atomic_buffer_len;
       c.remote_atomic_buffer_rkey = remote_infos_[peer].atomic_buffer_rkey;
-      cxi_transport_->connect_peer(peer, remote_infos_[peer]);
+      CxiTransport* transport = cxi_transport_for_rank(peer);
+      if (!transport) {
+        throw std::runtime_error("CXI peer transport is not initialized");
+      }
+      transport->connect_peer(peer, remote_infos_[peer]);
       if (proxy_trace_enabled()) {
 #ifdef USE_LIBFABRIC_CXI
         fprintf(stderr,
@@ -1162,13 +1174,33 @@ void Proxy::run_local() {
          cfg_.thread_idx, total_seen, cfg_.d2h_queues.size());
 }
 
+CxiTransport* Proxy::cxi_transport_for_rank(int rank) const {
+  if (rank < 0 || rank >= static_cast<int>(cxi_transports_by_rank_.size())) {
+    return nullptr;
+  }
+  return cxi_transports_by_rank_[rank].get();
+}
+
+uint64_t Proxy::load_cxi_barrier_word_sum(size_t slot) const {
+  uint64_t total = 0;
+  for (auto const& transport : cxi_transports_by_rank_) {
+    if (transport) total += transport->load_barrier_word(slot);
+  }
+  return total;
+}
+
 void Proxy::poll_cxi_completions() {
-  if (!cxi_transport_ || cxi_outstanding_ops_ == 0) return;
+  if (cxi_outstanding_ops_ == 0) return;
   TransportCompletion completions[kMaxOutstandingSends];
   int const max_poll =
       static_cast<int>(std::min(cxi_outstanding_ops_,
                                 static_cast<size_t>(kMaxOutstandingSends)));
-  int const ne = cxi_transport_->poll(completions, max_poll);
+  int ne = 0;
+  for (auto& transport : cxi_transports_by_rank_) {
+    if (!transport || ne >= max_poll) continue;
+    int const got = transport->poll(completions + ne, max_poll - ne);
+    if (got > 0) ne += got;
+  }
   for (int i = 0; i < ne; ++i) {
     if (completions[i].status != 0) {
       throw std::runtime_error("CXI completion returned non-zero status");
@@ -1202,8 +1234,12 @@ void Proxy::post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     auto const& cmd = cmds_to_post[i];
     int const dst_rank = static_cast<int>(cmd.dst_rank);
+    CxiTransport* transport = cxi_transport_for_rank(dst_rank);
     switch (get_base_cmd(cmd.cmd_type)) {
       case CmdType::WRITE: {
+        if (!transport) {
+          throw std::runtime_error("CXI destination transport is not initialized");
+        }
         bool const low_latency = !cfg_.use_normal_mode;
         uint64_t const local_offset =
             decode_write_offset(cmd.req_lptr, low_latency);
@@ -1211,15 +1247,15 @@ void Proxy::post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
             decode_write_offset(cmd.req_rptr, low_latency);
         bool const has_signaling_atomic =
             cfg_.use_normal_mode && cmd.atomic_offset > 0 && cmd.atomic_val > 0;
-        cxi_transport_->post_write(dst_rank,
-                                   has_signaling_atomic ? kCxiInternalWrId
-                                                        : wrs_to_post[i],
-                                   local_offset, remote_offset, cmd.bytes,
-                                   low_latency);
+        transport->post_write(dst_rank,
+                              has_signaling_atomic ? kCxiInternalWrId
+                                                   : wrs_to_post[i],
+                              local_offset, remote_offset, cmd.bytes,
+                              low_latency);
         ++cxi_outstanding_ops_;
 
         if (has_signaling_atomic) {
-          cxi_transport_->post_atomic_add(
+          transport->post_atomic_add(
               dst_rank, wrs_to_post[i], cmd.atomic_offset,
               static_cast<int64_t>(cmd.atomic_val), /*fence=*/true);
           ++cxi_outstanding_ops_;
@@ -1227,10 +1263,13 @@ void Proxy::post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
         break;
       }
       case CmdType::ATOMIC: {
+        if (!transport) {
+          throw std::runtime_error("CXI destination transport is not initialized");
+        }
         int v = static_cast<int>(cmd.value);
         if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
         if (get_is_combine(cmd.cmd_type)) v = 1;
-        cxi_transport_->post_atomic_add(
+        transport->post_atomic_add(
             dst_rank, wrs_to_post[i], cmd.req_rptr,
             static_cast<int64_t>(static_cast<int32_t>(v)), /*fence=*/true);
         ++cxi_outstanding_ops_;
@@ -1449,8 +1488,11 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
 
 void Proxy::destroy(bool free_gpu_buffer) {
   if (cxi_transport_) {
-    cxi_transport_->destroy();
-    cxi_transport_.reset();
+    for (auto& transport : cxi_transports_by_rank_) {
+      if (transport) transport->destroy();
+    }
+    cxi_transports_by_rank_.clear();
+    cxi_transport_ = nullptr;
 
     if (free_gpu_buffer && cfg_.gpu_buffer) {
       cudaError_t e;
@@ -1866,7 +1908,11 @@ void Proxy::barrier_check() {
       if (last_sent_seq != seq) {
         last_sent_seq = seq;
         if (cfg_.rank != 0) {
-          cxi_transport_->post_barrier_atomic_add(
+          CxiTransport* transport = cxi_transport_for_rank(0);
+          if (!transport) {
+            throw std::runtime_error("CXI barrier transport to rank 0 missing");
+          }
+          transport->post_barrier_atomic_add(
               /*dst_rank=*/0, kCxiInternalWrId, kArrivalSlot, 1);
           ++cxi_outstanding_ops_;
         }
@@ -1875,16 +1921,19 @@ void Proxy::barrier_check() {
       if (cfg_.rank == 0) {
         uint64_t const expected_arrivals =
             seq * static_cast<uint64_t>(std::max(0, cfg_.num_nodes - 1));
-        if (cxi_transport_->load_barrier_word(kArrivalSlot) <
-            expected_arrivals) {
+        if (load_cxi_barrier_word_sum(kArrivalSlot) < expected_arrivals) {
           return;
         }
 
         int const ranks_per_node = ranks_per_node_for_proxy(cfg_);
         for (int r = ranks_per_node; r < static_cast<int>(peers_.size());
              r += ranks_per_node) {
-          cxi_transport_->post_barrier_atomic_add(
-              r, kCxiInternalWrId, kReleaseSlot, 1);
+          CxiTransport* transport = cxi_transport_for_rank(r);
+          if (!transport) {
+            throw std::runtime_error("CXI barrier release transport missing");
+          }
+          transport->post_barrier_atomic_add(r, kCxiInternalWrId, kReleaseSlot,
+                                             1);
           ++cxi_outstanding_ops_;
         }
         for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
@@ -1899,7 +1948,7 @@ void Proxy::barrier_check() {
         return;
       }
 
-      if (cxi_transport_->load_barrier_word(kReleaseSlot) < seq) return;
+      if (load_cxi_barrier_word_sum(kReleaseSlot) < seq) return;
       for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
         lb->release_seq[lr].store(seq, std::memory_order_release);
       }

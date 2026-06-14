@@ -115,6 +115,8 @@ class Proxy {
   void post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
                          std::vector<TransferCmd> const& cmds_to_post);
   void poll_cxi_completions();
+  CxiTransport* cxi_transport_for_rank(int rank) const;
+  uint64_t load_cxi_barrier_word_sum(size_t slot) const;
   void post_barrier_msg(int dst_rank, bool ack, uint64_t seq);
   void send_barrier(uint64_t wr);
   void barrier_check();
@@ -148,7 +150,8 @@ class Proxy {
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
   std::vector<ProxyCtx*> ctx_by_tag_;
   void* atomic_buffer_ptr_ = nullptr;
-  std::unique_ptr<CxiTransport> cxi_transport_;
+  CxiTransport* cxi_transport_ = nullptr;
+  std::vector<std::unique_ptr<CxiTransport>> cxi_transports_by_rank_;
   size_t cxi_outstanding_ops_ = 0;
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
